@@ -6,6 +6,7 @@
 <title>Integrated Dynamic BioProcessing (IDB) — mAb digital twin</title>
 <script src="/static/chart.umd.js"></script>  <!-- Chart.js 4.4.1 (MIT), bundled so no CDN is needed -->
 <script src="/static/pfd.js"></script>        <!-- live process flow diagram -->
+<script src="/static/pfdvideo.js"></script>   <!-- dynamic start-up film (MP4 / WebM) -->
 <style>
 :root{--bg:#f4f6f9;--card:#fff;--bd:#e3e7ee;--t1:#16202c;--t2:#5b6675;--ac:#0e7c7b;--er:#b42318}
 *{box-sizing:border-box}
@@ -48,6 +49,7 @@ td,th{padding:4px 6px;border-bottom:1px solid var(--bd);text-align:left;vertical
 .muted{color:var(--t2)}
 .err{color:var(--er);font-weight:600}
 .note{margin:3px 0}
+.fcnote{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;border-radius:8px;padding:6px 8px;font-size:11.5px;margin-bottom:6px}
 /* process flow diagram */
 .pfdbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
 .pfdbar input[type=range]{flex:1;min-width:180px;accent-color:var(--ac)}
@@ -58,6 +60,12 @@ td,th{padding:4px 6px;border-bottom:1px solid var(--bd);text-align:left;vertical
 #pfdTable td:nth-child(n+3),#pfdTable th:nth-child(n+3){text-align:right;white-space:nowrap}
 #pfdTable tr.on td{background:#e6f5f3}
 #pfdTable thead th{position:sticky;top:0;background:#fff}
+/* video export */
+#vidCanvas{display:block;width:100%;height:auto;aspect-ratio:16/9;border-radius:12px;background:#e9edf3;margin-top:4px}
+#vidOut video{display:block;width:100%;max-height:440px;margin-top:10px;border-radius:12px;background:#000}
+.vidlinks{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px}
+.btnlink{display:inline-block;background:var(--ac);color:#fff;border-radius:8px;padding:8px 14px;font-weight:600;text-decoration:none}
+#vidInfo{display:block;margin:2px 0 6px}
 /* print report (hidden on screen) */
 .print-only{display:none}
 #printHead h2{font-size:18px;margin:0 0 2px}
@@ -153,6 +161,36 @@ td,th{padding:4px 6px;border-bottom:1px solid var(--bd);text-align:left;vertical
       <summary>Stream table (values at the hour shown)</summary>
       <div class="tblwrap"><table id="pfdTable"></table></div>
     </details>
+  </div>
+
+  <div class="card no-print" id="vidCard">
+    <h3>Video export — dynamic start-up film of the last run</h3>
+    <div class="pfdbar">
+      <label>Start <select id="vidStart">
+        <option value="0" selected>Campaign start (N-1 seed)</option>
+        <option value="inoc">N inoculation</option>
+        <option value="cap">First Protein A cycle</option>
+        <option value="ds">First drug substance</option>
+        <option value="custom">At hour…</option></select></label>
+      <input id="vidHour" type="number" value="0" min="0" step="1" hidden aria-label="Start hour">
+      <label>Length <select id="vidLen">
+        <option value="1">1 hour</option><option value="6">6 hours</option><option value="24">1 day</option>
+        <option value="72">3 days</option><option value="168">1 week</option>
+        <option value="startup" selected>Start-up, until first drug substance</option>
+        <option value="all">To the end of the run</option></select></label>
+      <label>Speed <select id="vidRate">
+        <option value="auto" selected>Auto</option><option value="0.25">15 min/s</option><option value="1">1 h/s</option>
+        <option value="6">6 h/s</option><option value="24">1 day/s</option></select></label>
+      <label><input type="checkbox" id="vidTour" checked> Zoom to each unit as it joins</label>
+      <label>Size <select id="vidRes"><option value="1080" selected>1920×1080</option><option value="720">1280×720</option></select></label>
+      <button id="vidPreview" type="button" class="ghost">Preview</button>
+      <button id="vidRecord" type="button">● Record video</button>
+      <button id="vidStop" type="button" class="ghost" disabled>Stop</button>
+    </div>
+    <span id="vidInfo" class="muted">Run a simulation first.</span>
+    <canvas id="vidCanvas" width="1920" height="1080"></canvas>
+    <div id="vidOut"></div>
+    <div class="muted" style="margin-top:6px">Recording runs in real time: keep this tab visible until it finishes. Safari and recent Chrome/Edge save MP4 (plays on iPhone, Keynote, PowerPoint); Firefox saves WebM.</div>
   </div>
 
   <div id="notes" class="card"></div>
@@ -306,6 +344,23 @@ function stacked(w) {
                             backgroundColor: PAL[i % PAL.length], stack: 's'})), 'm³/day', null, true);
 }
 
+// Why a run has no NevAI forecast, shown on the three NevAI charts (screen and print)
+function fcReason(j) {
+  if (!j || j.forecaster_used) return '';
+  if (!$('useFc').checked) return 'NevAI forecasts were unticked for this run';
+  return j.forecaster_reason || 'NevAI was not available on the server';
+}
+function fcNotes(j) {
+  const reason = fcReason(j);
+  ['cTitre', 'cBufFc', 'cWw'].forEach(id => {
+    const card = $(id).closest('.card');
+    let n = card.querySelector('.fcnote');
+    if (!reason) { if (n) n.remove(); return; }
+    if (!n) { n = document.createElement('div'); n.className = 'fcnote'; card.insertBefore(n, card.querySelector('.chart')); }
+    n.textContent = 'No NevAI forecast in this run: ' + reason + '. Run again once the status shows "NevAI: ready".';
+  });
+}
+
 function renderDesign(d) {
   const n1 = d.n1 || {};
   const seed = n1.enabled
@@ -390,12 +445,15 @@ function render(j) {
                    .map(r => ({x: r.day, y: r.ww_fc_24h_L / 24})), C[4], {showLine: false, pointRadius: 2})], 'L/h');
   stacked(W);
   tables(j);
+  fcNotes(j);
   if (window.PFD) PFD.load(j);
+  if (window.PFDVideo) PFDVideo.load(j);
 }
 
 async function run() {
   $('runBtn').disabled = true;
   if (window.PFD) PFD.pause();
+  if (window.PFDVideo) PFDVideo.stop();
   setStatus('Running…');
   try {
     const params = gather();
@@ -404,23 +462,33 @@ async function run() {
     LAST = j;
     LAST.seed = +$('seed').value || 0;
     render(j);
-    setStatus('Done' + (j.forecaster_used ? ' · NevAI forecasts on' : ' · NevAI off (not trained yet, training, or unticked)'));
+    const why = fcReason(j);
+    setStatus('Done' + (j.forecaster_used ? ' · NevAI forecasts on' : ' · NevAI not used: ' + why));
+    if (!j.forecaster_used && $('useFc').checked) refreshAI();   // start polling; re-runs when training ends
     api('/api/icb/portfolio', {params}).then(renderPortfolio)
       .catch(e => { $('pfNotes').textContent = e.message; });
   } catch (e) { setStatus(e.message, true); }
   finally { $('runBtn').disabled = false; }
 }
 
-let pollT = null;
+let pollT = null, wasTraining = false;
 async function refreshAI() {
   try {
     const s = await api('/api/icb/nevai/status');
     const t = s.training || {};
-    $('aiState').textContent = t.running ? 'NevAI: training… (a minute or two locally, longer on Render free)'
+    $('aiState').textContent = t.running ? 'NevAI: training… (this page re-runs with forecasts when it finishes)'
       : s.ready ? 'NevAI: ready (trained ' + (s.titre.last_trained || '') + ')'
-      : t.error ? 'NevAI: training failed – ' + t.error : 'NevAI: not trained';
+      : t.error ? 'NevAI: training failed – ' + t.error
+      : 'NevAI: not available – ' + (s.why_off || 'not trained');
     clearTimeout(pollT);
-    if (t.running) pollT = setTimeout(refreshAI, 5000);
+    if (t.running) { wasTraining = true; pollT = setTimeout(refreshAI, 5000); return; }
+    if (wasTraining) {
+      wasTraining = false;
+      if (s.ready && LAST && !LAST.forecaster_used && $('useFc').checked && !$('runBtn').disabled) {
+        setStatus('NevAI finished training — running again with forecasts…');
+        run();
+      }
+    }
   } catch (e) { $('aiState').textContent = 'NevAI status unavailable'; }
 }
 
@@ -447,6 +515,7 @@ function paramTables(p) {
 
 function preparePrint() {
   if (window.PFD) PFD.pause();
+  if (window.PFDVideo) PFDVideo.stop();
   // charts -> images, so they print at the right size
   for (const [id, ch] of Object.entries(CH)) {
     const box = $(id).parentNode;
@@ -456,17 +525,22 @@ function preparePrint() {
   }
   const p = LAST ? LAST.params : null;
   const mol = $('molecule').selectedOptions[0] ? $('molecule').selectedOptions[0].textContent : '';
+  const why = fcReason(LAST);
   $('printHead').innerHTML = '<h2>IDB mAb digital twin — simulation report</h2><div class="muted">' +
     esc([new Date().toLocaleString(), mol, $('upMode').selectedOptions[0].textContent,
          $('capMode').selectedOptions[0].textContent,
          p ? 'polishing ' + (p.polish.order === 'cex_aex' ? 'CEX → AEX' : 'AEX → CEX') : '',
-         'seed ' + (LAST ? LAST.seed : '—'), LAST && LAST.forecaster_used ? 'NevAI on' : 'NevAI off'].filter(Boolean).join(' · ')) +
+         'seed ' + (LAST ? LAST.seed : '—'),
+         LAST && LAST.forecaster_used ? 'NevAI on' : 'NevAI off' + (why ? ' (' + why + ')' : '')].filter(Boolean).join(' · ')) +
     '<br>Diagram shown at ' + esc(window.PFD ? PFD.clock() : '—') + '</div>';
   $('printParams').innerHTML = p ? paramTables(p) : '<div class="muted">Run a simulation first.</div>';
 }
 
 function printReport() {
   if (!LAST) { setStatus('Run a simulation before printing', true); return; }
+  if (!LAST.forecaster_used && $('useFc').checked &&
+      !confirm('This run has no NevAI forecasts (' + fcReason(LAST) + '), so the NevAI charts will be empty.\n\n' +
+               'Print anyway? (Cancel, wait for "NevAI: ready", then Run simulation.)')) return;
   preparePrint();
   setTimeout(() => window.print(), 50);   // let the chart images decode
 }
@@ -477,6 +551,7 @@ async function init() {
     if (m.auth && m.user) { $('whoName').textContent = 'Signed in as ' + m.user; $('who').hidden = false; }
   }).catch(() => {});
   if (window.PFD) PFD.init();
+  if (window.PFDVideo) PFDVideo.init();
   const def = await api('/api/icb/defaults');
   OPS = def.buffer_ops || OPS;
   buildForm(def.params);
@@ -491,7 +566,7 @@ async function init() {
   $('molecule').onchange = () => {   // the custom curve box lives in the Parameters panel
     if ($('molecule').value === 'custom') { $('paramPanel').open = true; $('customPts').focus(); }
   };
-  refreshAI();
+  await refreshAI();
   run();
 }
 init().catch(e => setStatus(e.message, true));
