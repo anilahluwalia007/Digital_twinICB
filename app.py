@@ -22,12 +22,13 @@ import time
 from datetime import timedelta
 from urllib.parse import urlparse
 
-from flask import (Flask, jsonify, redirect, render_template_string, request,
-                   session, url_for)
+from flask import (Flask, jsonify, redirect, render_template, render_template_string,
+                   request, session, url_for)
 from werkzeug.middleware.proxy_fix import ProxyFix
 from icb_routes import register_icb_routes
 
-app = Flask(__name__, static_folder="static", static_url_path="/static")
+app = Flask(__name__, template_folder="templates",   # templates/index.html
+            static_folder="static", static_url_path="/static")   # static/chart.umd.js
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)   # Render terminates HTTPS in front of the app
 
 ON_RENDER = bool(os.environ.get("RENDER"))
@@ -187,7 +188,7 @@ def me():
 
 @app.route("/")
 def index():
-    return app.send_static_file("index.html")
+    return render_template("index.html")      # templates/index.html
 
 
 @app.route("/healthz")
