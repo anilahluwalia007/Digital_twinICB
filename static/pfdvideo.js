@@ -4,7 +4,9 @@
    The PFD starts greyed out. Each unit and utility lights up, with an iOS-style
    zoom and highlight, at the hour it first carries flow, in flow order. Flowing
    streams animate; vessel levels, column states and values follow the run hour
-   by hour. Recording uses MediaRecorder: MP4 (H.264) where the browser supports
+   by hour. Quiet stretches where no new unit joins (e.g. the N-1 seed phase) are
+   fast-forwarded to at most MAX_GAP_S seconds of film.
+   Recording uses MediaRecorder: MP4 (H.264) where the browser supports
    it (Safari, recent Chrome/Edge), otherwise WebM. Recording runs in real time.
    Page ids: vidStart vidHour vidLen vidRate vidTour vidRes vidPreview vidRecord vidStop vidInfo vidCanvas vidOut
    API: PFDVideo.init()  PFDVideo.load(simResult)  PFDVideo.stop()
@@ -35,6 +37,7 @@
   const FCOL = Object.assign({}, KCOL, {pp: TEAL});
   const KDASH = {pp: [], pb: [6, 3], pw: [6, 3], pa: [6, 3], pd: [6, 3], px: [2, 3], ps: [9, 4]};
   const TITLE_S = 3.2, FOCUS_S = 2.8, FLY_S = 0.9, OUT_S = 1.0, END_S = 5;
+  const MAX_GAP_S = 5;   // longest quiet stretch (no new unit) in film seconds
 
   function U(key, short, title, tag, util, box, act, desc) { return {key, short, title, tag, util: !!util, box, act, desc}; }
   // flow order; box = [x0, y0, x1, y1] in diagram coordinates; act = streams that put the unit in the circuit
@@ -226,7 +229,12 @@
     UNITS.forEach(u => { const f = first[u.key]; if (f !== null) (groups[f] = groups[f] || []).push(u); });
     Object.keys(groups).map(Number).sort((a, b) => a - b).forEach(k => {
       const hk = H0 + k;
-      if (hk > clock) { push({type: 'play', dur: (hk - clock) / rate, c0: clock, c1: hk, from: cam, to: cam}); clock = hk; }
+      if (hk > clock) {
+        const full = (hk - clock) / rate;
+        push({type: 'play', dur: Math.min(full, MAX_GAP_S), c0: clock, c1: hk, from: cam, to: cam,
+              ff: full > MAX_GAP_S});
+        clock = hk;
+      }
       if (o.tour) {
         groups[k].forEach(u => {
           const to = camFor(u);
@@ -581,6 +589,8 @@
       cap = {u: s.prevUnit, a: 1 - clamp(lt / 0.3), dy: 0};
       isl = {text: 'Joining the circuit · ' + s.prevUnit.tag, a: 1 - clamp(lt / 0.4), w: 1};
     }
+    if (s.type === 'play' && s.ff)
+      isl = {text: `Fast-forward · next unit joins at hour ${s.c1}`, a: 1, w: easeOutBack(clamp(lt / 0.5))};
     c.setTransform(SC, 0, 0, SC, 0, 0);
     const bg = c.createLinearGradient(0, 0, 0, VH);
     bg.addColorStop(0, '#eef1f6'); bg.addColorStop(1, '#dde3ec');
@@ -679,7 +689,8 @@
       const n = Object.values(p.first).filter(v => v !== null).length;
       info(`Film ≈ ${mmss(p.T)} for ${p.H1 - p.H0} h of operation (campaign day ${(p.H0 / 24).toFixed(2)} → ` +
            `${(p.H1 / 24).toFixed(2)}); ${n} of ${UNITS.length} units join.` +
-           (p.T > 600 ? ' Long film: pick a faster speed or a shorter window.' : ''));
+           (p.T > 600 ? ' Long film: pick a faster speed or a shorter window.' : '') +
+           (n <= 2 ? ' Few units run in this window: start at N inoculation or pick a longer length.' : ''));
     } catch (e) { info(e.message, true); }
   }
 
