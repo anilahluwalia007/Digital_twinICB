@@ -6,6 +6,11 @@
    turn teal and animate; hover a line or stream number for L/h, g/h and g/L.
    Page ids used: pfdBox pfdPlay pfdSlider pfdSpeed pfdSvg pfdClock pfdNote pfdTable
    API: PFD.init()  PFD.load(simResult)  PFD.pause()  PFD.clock()
+   For the video exporter (static/pfdvideo.js):
+        PFD.svg({video: true})  clean diagram (no live text) as an SVG string
+        PFD.geo()               pipe, vessel, column, value-label and tag coordinates
+        PFD.state(i)            stream values, equipment state and readout at series row i
+        PFD.series()  PFD.params()  PFD.length()
 */
 (function () {
   'use strict';
@@ -49,8 +54,9 @@
 .pfd .box{fill:#f8fafc;stroke:#cbd5e1}.pfd .cryo{fill:#ecfdf5;stroke:#15803d;stroke-width:1.3}.pfd .cap2{fill:#1d2733}
 @media print{.pfd .fl{display:none}}`;
 
-  // ── drawing primitives (three layers: pipes, equipment, labels) ──
-  let LP, LE, LT;
+  // ── drawing primitives (three layers: pipes, equipment, labels) + geometry for the video ──
+  let LP, LE, LT, VIDEO = false;
+  let GEO = {pipes: [], tanks: {}, cols: {}, vt: {}, tags: {}, W, H};
   const LV = {};
   const KIND = {p: 'pp', b: 'pb', w: 'pw', a: 'pa', d: 'pd', x: 'px', s: 'ps'};
   const COLOR = {pp: '#1d2733', pb: '#7c3aed', pw: '#2563eb', pa: '#dc2626', pd: '#a16207', px: '#64748b', ps: '#16a34a'};
@@ -65,16 +71,19 @@
       arr.map((t, i) => `<tspan x="${x}" dy="${i ? dy : 0}">${esc(t)}</tspan>`).join('') + '</text>');
   }
   function vt(id, x, y, anchor) {
+    GEO.vt[id] = {x, y, anchor: anchor || 'middle'};
     LT.push(`<text id="vt-${id}" x="${x}" y="${y}" class="val halo" text-anchor="${anchor || 'middle'}">` +
       `<tspan x="${x}"></tspan><tspan x="${x}" dy="10"></tspan></text>`);
   }
   function tag(id, x, y) {
+    (GEO.tags[id] = GEO.tags[id] || []).push([x, y]);
     const w = 7 + String(id).length * 3.2;
     LT.push(`<g class="tag" data-s="${id}"><path d="M${x - w},${y} L${x},${y - 8} L${x + w},${y} L${x},${y + 8} Z"/>` +
       `<text x="${x}" y="${y + 2.8}">${esc(id)}</text><title></title></g>`);
   }
   function pipe(id, pts, kind, badge, noArrow) {
     const k = KIND[kind || 'p'];
+    GEO.pipes.push({id: id || null, pts, k});
     const d = 'M' + pts.map(q => q[0] + ',' + q[1]).join(' L');
     LP.push(`<g class="st ${k}"${id ? ` data-s="${id}"` : ''}><path class="pl" d="${d}"` +
       (noArrow ? '' : ` marker-end="url(#ar-${k})"`) + '/>' +
@@ -94,6 +103,7 @@
     const w = o.w || 70, ry = w * 0.18, x0 = cx - w / 2, x1 = cx + w / 2, yb = yTop + h;
     const d = `M${x0},${yTop} A${w / 2},${ry} 0 0 1 ${x1},${yTop} L${x1},${yb} A${w / 2},${ry} 0 0 1 ${x0},${yb} Z`;
     LV[id] = {base: yb + ry, span: h + 2 * ry};
+    GEO.tanks[id] = {cx, x0, x1, yTop, yb, w, ry, base: yb + ry, span: h + 2 * ry};
     LE.push(`<g id="eq-${id}"><clipPath id="cp-${id}"><path d="${d}"/></clipPath><path class="vb" d="${d}"/>` +
       `<rect class="lvl" id="lv-${id}" clip-path="url(#cp-${id})" x="${x0}" y="${yb + ry}" width="${w}" height="0"/>` +
       `<path class="vo" d="${d}"/></g>`);
@@ -112,6 +122,7 @@
   }
   function column(id, cx, yTop, h, label) {
     const w = 20, x0 = cx - w / 2;
+    GEO.cols[id] = {x0, yTop, w, h, label: label || ''};
     LE.push(`<g class="col" id="eq-${id}"><rect class="cb" x="${x0}" y="${yTop}" width="${w}" height="${h}" rx="4"/>` +
       `<rect class="bed" x="${x0 + 1.5}" y="${yTop + 8}" width="${w - 3}" height="${h - 16}"/>` +
       `<path class="cl" d="M${x0},${yTop + 8} h${w} M${x0},${yTop + h - 8} h${w}"/></g>`);
@@ -175,7 +186,7 @@
   // ── the flowsheet ──
   function drawRow1() {
     LT.push(`<text x="${W - 10}" y="24" class="ttl" text-anchor="end">IDB mAb line — process flow diagram</text>`);
-    LT.push(`<text id="pfd-clk" x="${W - 10}" y="40" class="sub" text-anchor="end">Run a simulation to start the live view</text>`);
+    if (!VIDEO) LT.push(`<text id="pfd-clk" x="${W - 10}" y="40" class="sub" text-anchor="end">Run a simulation to start the live view</text>`);
     // USP: N-1 seed, N reactor, TFF
     txt(90, 38, 'Media');
     pipe('U1', [[90, 45], [90, 111]], 'p', [90, 74]);
@@ -305,10 +316,12 @@
     txt(990, 836, 'VF flush buffer and WFI', 'tg');
     pipe('47', [[950, 600], [1432, 600], [1432, 850]], 'p', [1060, 600]);
     pipe('48', [[1432, 850], [20, 850], [20, 990], [54, 990]], 'p', [20, 920]);
-    // live readout box
-    LE.push('<rect class="box" x="1090" y="470" width="330" height="116" rx="6"/>');
-    txt(1102, 488, 'Live readout', 'cap', 'start');
-    for (let i = 0; i < 5; i++) LT.push(`<text id="ro${i}" x="1102" y="${506 + i * 15}" class="lb" text-anchor="start"></text>`);
+    // live readout box (the video draws its own side panel instead)
+    if (!VIDEO) {
+      LE.push('<rect class="box" x="1090" y="470" width="330" height="116" rx="6"/>');
+      txt(1102, 488, 'Live readout', 'cap', 'start');
+      for (let i = 0; i < 5; i++) LT.push(`<text id="ro${i}" x="1102" y="${506 + i * 15}" class="lb" text-anchor="start"></text>`);
+    }
   }
 
   function drawRow3() {
@@ -385,8 +398,10 @@
     return s + '</defs>';
   }
 
-  function build() {
+  function build(opts) {
+    VIDEO = !!(opts && opts.video);
     LP = []; LE = []; LT = [];
+    GEO = {pipes: [], tanks: {}, cols: {}, vt: {}, tags: {}, W, H};
     drawRow1(); drawRow2(); drawRow3();
     return `<svg xmlns="http://www.w3.org/2000/svg" class="pfd" viewBox="0 0 ${W} ${H}" role="img" ` +
       `aria-label="Process flow diagram of the IDB mAb line"><style>${CSS}</style>${defs()}` +
@@ -493,27 +508,32 @@
     };
   }
 
-  function lvl(id, f) {
+  // DOM writers for the live diagram
+  function domLvl(id, f) {
     const g = LV[id], el = $('lv-' + id);
     if (!g || !el) return;
     f = Math.max(0, Math.min(1, num(f)));
     el.setAttribute('y', g.base - f * g.span);
     el.setAttribute('height', f * g.span);
   }
-  function setVT(id, a, b) {
+  function domVT(id, a, b) {
     const t = $('vt-' + id);
     if (!t) return;
     t.children[0].textContent = a || '';
     t.children[1].textContent = b || '';
   }
-  function colCls(id, cls) {
+  function domCol(id, cls) {
     const e = $('eq-' + id);
     if (!e) return;
     e.classList.remove('load', 'regen');
     if (cls) e.classList.add(cls);
   }
 
-  function equipment(r0, r, c, v) {
+  // equipment state for one hour, written into E = {lv, vt, col}
+  function equipment(r0, r, c, v, E) {
+    const lvl = (id, f) => { E.lv[id] = Math.max(0, Math.min(1, num(f))); };
+    const setVT = (id, a, b) => { E.vt[id] = [a || '', b || '']; };
+    const colCls = (id, cls) => { E.col[id] = cls || ''; };
     const inN = r0.phase === 1, profile = P.upstream.mode !== 'mechanistic';
     lvl('R101', inN ? 0 : 0.8);
     setVT('R101', inN ? 'transferred' : `${fmt(r.X_n1)} ×10⁶/mL`, '');
@@ -562,30 +582,37 @@
   }
 
   function readout(i, r0, r) {
-    const set = (k, s) => { const e = $('ro' + k); if (e) e.textContent = s; };
     const fc = lastFc(i);
-    set(0, `Campaign day ${fmt(r.day)} · ` + (r0.phase ? `N day ${fmt(r.n_day)}` : 'N-1 seed phase'));
-    set(1, `Permeate titre ${r0.titre_harvest != null ? fmt(r.titre_harvest) + ' g/L' : '—'} · NevAI +24 h ` +
-      (fc != null ? fmt(fc) + ' g/L' : '—'));
-    set(2, `Surge tank ${fmt(r.sump_L)} L, ${fmt(r.sump_g)} g · Protein A cycles ${Math.round(r.cycles)}`);
-    set(3, `Buffer use ${fmt(r.buffer_L_h)} L/h · wastewater ${fmt(r.ww_total_Lh)} L/h`);
-    set(4, `Drug substance so far ${fmt(r.ds_g_cum / 1000)} kg`);
-    clockTxt = `hour ${r.h} of ${S[S.length - 1].h} · campaign day ${fmt(r.day)}` +
+    const lines = [
+      `Campaign day ${fmt(r.day)} · ` + (r0.phase ? `N day ${fmt(r.n_day)}` : 'N-1 seed phase'),
+      `Permeate titre ${r0.titre_harvest != null ? fmt(r.titre_harvest) + ' g/L' : '—'} · NevAI +24 h ` +
+        (fc != null ? fmt(fc) + ' g/L' : '—'),
+      `Surge tank ${fmt(r.sump_L)} L, ${fmt(r.sump_g)} g · Protein A cycles ${Math.round(r.cycles)}`,
+      `Buffer use ${fmt(r.buffer_L_h)} L/h · wastewater ${fmt(r.ww_total_Lh)} L/h`,
+      `Drug substance so far ${fmt(r.ds_g_cum / 1000)} kg`,
+    ];
+    const clock = `hour ${r.h} of ${S[S.length - 1].h} · campaign day ${fmt(r.day)}` +
       (r0.phase ? ` · N day ${fmt(r.n_day)}` : ' · N-1 phase');
-    const k1 = $('pfdClock'); if (k1) k1.textContent = clockTxt;
-    const k2 = $('pfd-clk'); if (k2) k2.textContent = 'Live playback · ' + clockTxt;
+    return {lines, clock, fc};
   }
 
-  function show(i) {
-    if (!S.length || !P) return;
+  // everything the diagram shows at series row i (used by the live view and the video)
+  function state(i) {
+    if (!S.length || !P) return null;
     i = Math.max(0, Math.min(S.length - 1, i | 0));
-    idx = i;
     const r0 = S[i], r = {};
     for (const k in r0) r[k] = num(r0[k]);
     const c = ctx(r0, r), vals = {};
-    for (const [id, desc, fn] of STREAMS) {
-      const v = fn ? fn(r, c) : null;
-      vals[id] = v;
+    for (const [id, , fn] of STREAMS) vals[id] = fn ? fn(r, c) : null;
+    const eq = {lv: {}, vt: {}, col: {}};
+    equipment(r0, r, c, vals, eq);
+    const ro = readout(i, r0, r);
+    return {i, r0, r, c, vals, eq, lines: ro.lines, clock: ro.clock, fc: ro.fc};
+  }
+
+  function apply(st) {
+    for (const [id, desc] of STREAMS) {
+      const v = st.vals[id];
       const L = v ? num(v.L) : 0;
       const g = v && v.g !== undefined && v.g !== null ? num(v.g) : null;
       const on = L > 1e-6;
@@ -606,10 +633,22 @@
         tr.classList.toggle('on', on);
       }
     }
-    equipment(r0, r, c, vals);
-    readout(i, r0, r);
+    for (const id in st.eq.lv) domLvl(id, st.eq.lv[id]);
+    for (const id in st.eq.vt) domVT(id, st.eq.vt[id][0], st.eq.vt[id][1]);
+    for (const id in st.eq.col) domCol(id, st.eq.col[id]);
+    st.lines.forEach((s, k) => { const e = $('ro' + k); if (e) e.textContent = s; });
+    clockTxt = st.clock;
+    const k1 = $('pfdClock'); if (k1) k1.textContent = clockTxt;
+    const k2 = $('pfd-clk'); if (k2) k2.textContent = 'Live playback · ' + clockTxt;
     const sl = $('pfdSlider');
-    if (sl && +sl.value !== i) sl.value = i;
+    if (sl && +sl.value !== st.i) sl.value = st.i;
+  }
+
+  function show(i) {
+    const st = state(i);
+    if (!st) return;
+    idx = st.i;
+    apply(st);
   }
 
   function speed() { const s = $('pfdSpeed'); return s ? (+s.value || 6) : 6; }
@@ -686,5 +725,9 @@
     play();
   }
 
-  window.PFD = {init, load, pause, clock: () => clockTxt};
+  window.PFD = {
+    init, load, pause, clock: () => clockTxt,
+    svg: opts => build(opts), geo: () => GEO, state,
+    series: () => S, params: () => P, length: () => S.length,
+  };
 })();
