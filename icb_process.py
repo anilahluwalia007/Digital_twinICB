@@ -10,7 +10,7 @@ IDB (site definition)
   TFF   removes all cells from the N outflow (cell concentrate -> bio-kill);
         permeate (broth + product) -> harvest sump.
   DSP   standard Protein A from the sump, one cycle each time the sump holds
-        one column load -> low-pH VI -> CEX + AEX -> virus filter -> SPTFF.
+        one column load -> low-pH VI -> AEX + CEX (polish.order) -> virus filter -> SPTFF.
         3-column PCC is kept as an option.
 
 The permeate titre curve of each molecule (Figure 2) governs the process:
@@ -196,6 +196,7 @@ class PolishParams:
     vf_yield: float = 0.99
     vf_capacity_L: float = 2000.0
     vf_flush_L: float = 2.0
+    order: str = "aex_cex"           # "aex_cex" (AEX then CEX, as on the site PFD) or "cex_aex" (legacy)
 
 
 @dataclass
@@ -301,7 +302,7 @@ WASTE_STREAMS = {
     "capture_strip_cip":   ("DSP", "neutralisation", "mass",   "Protein A acid strip and caustic CIP"),
     "vi_flush":            ("DSP", "neutralisation", "event",  "VI tube start-up buffer"),
     "vi_divert":           ("DSP", "neutralisation", "event",  "Out-of-spec VI material diverted"),
-    "cex_flowthrough":     ("DSP", "direct",         "mass",   "CEX load flow-through (neutralised VI pool)"),
+    "cex_flowthrough":     ("DSP", "direct",         "mass",   "CEX load flow-through (AEX pool; VI pool in legacy order)"),
     "cex_buffers":         ("DSP", "neutralisation", "mass",   "CEX buffers incl. strip and CIP"),
     "aex_buffers":         ("DSP", "direct",         "mass",   "AEX membrane equilibration and flush"),
     "vf_flush":            ("DSP", "direct",         "mass",   "Virus filter pre-use flush"),
@@ -405,15 +406,25 @@ def buffer_L_per_g(p):
     tg = max(cyc["target_g"], 1e-9)
     elu = cyc["eluate_L"] / tg                       # eluate L per g loaded
     g1 = cyc["yield"] * vi.vi_yield                  # g after capture + VI
-    g2 = g1 * po.cex_yield
-    v3 = g2 / po.cex_pool_gL * (1 + po.aex_flush_frac)
-    g_ds = g2 * po.aex_yield * po.vf_yield * sp.sptff_yield
+    if po.order != "cex_aex":                        # AEX flow-through, then CEX bind/elute
+        aex = g1 * po.aex_buffer_L_per_g
+        g2 = g1 * po.aex_yield
+        cex = g2 * po.cex_buffer_L_per_g
+        g3 = g2 * po.cex_yield
+        v3 = g3 / po.cex_pool_gL                     # CEX pool feeds the virus filter
+    else:                                            # legacy: CEX, then AEX
+        cex = g1 * po.cex_buffer_L_per_g
+        g2 = g1 * po.cex_yield
+        aex = g2 * po.aex_buffer_L_per_g
+        g3 = g2 * po.aex_yield
+        v3 = g2 / po.cex_pool_gL * (1 + po.aex_flush_frac)
+    g_ds = g3 * po.vf_yield * sp.sptff_yield
     v_ret = g_ds / sp.target_gL
     d = {
         "capture": cyc["buffer_L"] / tg,
         "vi": elu * vi.acid_bias + elu * (1 + vi.acid_bias) * vi.base_frac,
-        "cex": g1 * po.cex_buffer_L_per_g,
-        "aex": g2 * po.aex_buffer_L_per_g,
+        "cex": cex,
+        "aex": aex,
         "vf": v3 * po.vf_flush_L / max(po.vf_capacity_L, 1e-9),
         "sptff": v_ret * (sp.DV + sp.excipient_frac),
     }

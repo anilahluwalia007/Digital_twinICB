@@ -13,7 +13,7 @@ output is campaign day; "n_day" is days since N inoculation (negative in N-1).
   Capture        batch: one cycle each time the sump holds one load;
                  pcc: 3-column PCC from a level-controlled surge
   VI             PI acid dose; out-of-spec or short-hold material diverted
-  Polishing      CEX, AEX, virus filter, SPTFF; buffer per gram
+  Polishing      AEX then CEX (polish.order), virus filter, SPTFF; buffer per gram
   Buffer         tracked per unit operation every hour
   NevAI          optional, advisory: 24 h titre forecast -> grams -> buffer
 
@@ -39,6 +39,11 @@ SERIES_KEYS = ["h", "day", "n_day", "phase", "X_n1", "Xv", "Xv_meas", "viability
                "harvest_g_h", "ds_g_cum", "buffer_L_h", "ww_total_Lh",
                "titre_fc_24h", "switch_fc_h", "ww_fc_24h_L", "g_fc_24h", "buffer_fc_24h_L",
                "g_next24", "buffer_next24_L"]
+# extra per-stream values for the live process flow diagram (static/pfd.js)
+SERIES_KEYS += (["Fin_Lh", "capture_switch", "ds_g_h",
+                 "L_vi", "g_vi", "L_aex", "g_aex", "L_cex", "g_cex", "L_vf", "g_vf",
+                 "L_ret", "L_df", "L_exc", "L_ds"]
+                + ["ww_" + k for k in WASTE_STREAMS] + ["buf_" + k for k in BUFFER_OPS])
 
 
 def _clamp(x, lo, hi):
@@ -417,21 +422,39 @@ class ICBSimulator:
                     if pkt[1] <= 1e-9:
                         tube.popleft()
 
-            # ── polishing -> VF -> SPTFF/inline DF -> formulation ──
+            # ── polishing -> VF -> UF/DF (SPTFF, inline DF) -> formulation ──
             m_ds_h = 0.0
+            pol = dict.fromkeys(("L_vi", "g_vi", "L_aex", "g_aex", "L_cex", "g_cex",
+                                 "L_vf", "g_vf", "L_ret", "L_df", "L_exc", "L_ds"), 0.0)
             if m_out > 0:
                 buf["vi"] += v_out * vi.base_frac
                 v_neut = v_out * (1 + vi.base_frac)
                 m1 = m_out * vi.vi_yield
-                ww["cex_flowthrough"] += v_neut
-                ww["cex_buffers"] += m1 * po.cex_buffer_L_per_g
-                buf["cex"] += m1 * po.cex_buffer_L_per_g
-                m2 = m1 * po.cex_yield
-                v2 = m2 / po.cex_pool_gL
-                ww["aex_buffers"] += m2 * po.aex_buffer_L_per_g
-                buf["aex"] += m2 * po.aex_buffer_L_per_g
-                m3 = m2 * po.aex_yield
-                v3 = v2 * (1 + po.aex_flush_frac)
+                pol.update(L_vi=v_neut, g_vi=m1)
+                if po.order != "cex_aex":
+                    # AEX flow-through, then CEX bind/elute (order on the site PFD)
+                    ww["aex_buffers"] += m1 * po.aex_buffer_L_per_g
+                    buf["aex"] += m1 * po.aex_buffer_L_per_g
+                    m2 = m1 * po.aex_yield
+                    v2 = v_neut * (1 + po.aex_flush_frac)
+                    ww["cex_flowthrough"] += v2
+                    ww["cex_buffers"] += m2 * po.cex_buffer_L_per_g
+                    buf["cex"] += m2 * po.cex_buffer_L_per_g
+                    m3 = m2 * po.cex_yield
+                    v3 = m3 / po.cex_pool_gL
+                    pol.update(L_aex=v2, g_aex=m2, L_cex=v3, g_cex=m3)
+                else:
+                    # legacy order: CEX bind/elute, then AEX flow-through
+                    ww["cex_flowthrough"] += v_neut
+                    ww["cex_buffers"] += m1 * po.cex_buffer_L_per_g
+                    buf["cex"] += m1 * po.cex_buffer_L_per_g
+                    m2 = m1 * po.cex_yield
+                    v2 = m2 / po.cex_pool_gL
+                    ww["aex_buffers"] += m2 * po.aex_buffer_L_per_g
+                    buf["aex"] += m2 * po.aex_buffer_L_per_g
+                    m3 = m2 * po.aex_yield
+                    v3 = v2 * (1 + po.aex_flush_frac)
+                    pol.update(L_cex=v2, g_cex=m2, L_aex=v3, g_aex=m3)
                 vf_used += v3
                 if vf_used >= po.vf_capacity_L:
                     vf_used -= po.vf_capacity_L
@@ -445,6 +468,8 @@ class ICBSimulator:
                 ww["sptff_permeate"] += max(0.0, v3 + sp.DV * v_ret - v_ret)
                 buf["sptff"] += v_ret * (sp.DV + sp.excipient_frac)
                 v_ds = v_ret * (1 + sp.excipient_frac)
+                pol.update(L_vf=v3, g_vf=m4, L_ret=v_ret, L_df=sp.DV * v_ret,
+                           L_exc=sp.excipient_frac * v_ret, L_ds=v_ds)
                 loss["polishing"] += m_out - m4
                 loss["sptff"] += m4 - m_ds_h
                 ds_g += m_ds_h
@@ -477,6 +502,7 @@ class ICBSimulator:
                 "titre_fc_24h": None, "switch_fc_h": None, "ww_fc_24h_L": None,
                 "g_fc_24h": None, "buffer_fc_24h_L": None,
             }
+            rec.update(pol)
             for k in BUFFER_OPS:
                 rec["buf_" + k] = buf[k] - buf0[k]
             for k, v in ww.items():

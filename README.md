@@ -2,8 +2,9 @@
 
 N-1 perfusion seed (media in = cell-free permeate out to waste) → N reactor
 (feed in = cells + broth + product out) → TFF cell removal (cell concentrate to
-bio-kill) → harvest sump → standard (batch) Protein A → low-pH viral inactivation
-→ CEX/AEX polishing → virus filter → SPTFF with inline DF → drug substance.
+bio-kill) → conditioned media surge tank → standard (batch) Protein A → low-pH
+viral inactivation → depth filtration → AEX → CEX → virus filter → UF/DF (SPTFF
+with inline DF) → formulation → BDS hold → cryovault.
 
 Each molecule's permeate titre curve (Figure 2) drives the process. Titre changes
 every hour, so buffer and wastewater are planned in litres per gram recovered, not
@@ -15,6 +16,10 @@ per day. The twin includes:
 - wastewater by stream, route and driver (volume, mass, event)
 - NevAI (LSTM) 24 h forecasts of titre, grams, buffer and wastewater
 - portfolio sizing across all molecules (which molecule sets buffer supply, which sets the sump)
+- a live process flow diagram that follows the site flowsheet (streams 1–63) and
+  plays the last run hour by hour, with a stream table and SVG download
+- a one-click Print / Save as PDF report (landscape: diagram, KPIs, charts, tables,
+  all parameters)
 - the old ATF perfusion model (cells returned to the reactor), kept for comparison
 
 Default parameters are illustrative, and the titre curves were read off a chart
@@ -47,6 +52,26 @@ Port 8000 is used because macOS reserves 5000 for AirPlay.
 The titre is interpolated linearly between points and held at the last value after
 the curve ends.
 
+## Process flow diagram and PDF report
+
+After each run the diagram under the KPIs plays the simulation hour by hour.
+Flowing lines turn teal and animate, the surge tank and Protein A SUM levels move,
+and columns colour up while loading or eluting. Hover a line or stream number for
+L/h, g/h and g/L; the stream table below the diagram shows the same values. Use
+the slider to pick an hour, then **Print / Save as PDF** and choose "Save as PDF"
+in the print dialog.
+
+Notes:
+- Items drawn in grey dashes (Brij-9 detergent, separate WFI lines, depth
+  filtration, on-line acid/base addition, holds in the intermediate SUMs) are on
+  the flowsheet but not in the simulator, so they show no numbers.
+- Polishing order: `polish.order` defaults to `aex_cex` (AEX then CEX, as on the
+  site PFD). Set it to `cex_aex` in the Parameters panel to reproduce earlier
+  results. Only polishing buffer and wastewater change slightly; drug substance
+  mass and the NevAI weights are unaffected.
+- The model runs one Protein A column train. The diagram alternates pairs 1&2 and
+  3&4 each cycle and swaps AEX, CEX and virus-filter duty each lot for display only.
+
 ## Put it on GitHub
 
 Create an empty repository on github.com (no README, no .gitignore), for example
@@ -60,12 +85,14 @@ Create an empty repository on github.com (no README, no .gitignore), for example
 3. On the new repository page, click **uploading an existing file**
    (or **Add file → Upload files**).
 4. Select everything inside the folder (Cmd + A) and drag it onto the page.
-   The `static` and `data` folders must be included. If folders don't upload,
+   The `static`, `templates` and `data` folders must be included. If folders don't upload,
    use Chrome.
 5. Click **Commit changes**.
 
 Check the repository shows `app.py`, `render.yaml`, `requirements.txt`,
-`static/index.html`, `static/chart.umd.js` and `data/icb/` with four files.
+`templates/index.html`, `static/chart.umd.js`, `static/pfd.js` and `data/icb/`
+with four files. `index.html` must be in `templates/` (not `static/`): that is
+where `app.py` loads it from.
 
 ### Option B — terminal
 
@@ -125,12 +152,14 @@ Notes:
 ## Files
 
 - `icb_process.py` — parameters, titre curves, waste streams, design check, portfolio sizing
-- `icb_dynamic.py` — hour-by-hour simulation: N-1, N + TFF, sump, capture, VI, polishing, buffer
+- `icb_dynamic.py` — hour-by-hour simulation: N-1, N + TFF, sump, capture, VI, polishing, buffer;
+  also records per-stream values for the diagram
 - `icb_nevai.py` — NevAI titre and wastewater forecasters (hourly, 24 h ahead)
 - `nevai_engine.py` — NevAI LSTM core (Python 3.9+ compatible)
 - `icb_routes.py` — API routes; background training
 - `app.py` — web app entry point; login page, sessions and logout
-- `static/index.html` — dashboard
+- `templates/index.html` — dashboard, print layout and PDF report
+- `static/pfd.js` — live process flow diagram (no external libraries)
 - `static/chart.umd.js` — Chart.js 4.4.1 (MIT), bundled so no CDN is needed
 - `data/icb/` — trained NevAI weights
 - `render.yaml`, `requirements.txt`, `.python-version` — Render deployment
