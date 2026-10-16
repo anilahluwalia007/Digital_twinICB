@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: icb-mab-twin
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --workers 1 --threads 4 --timeout 600 --bind 0.0.0.0:$PORT
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: DATA_DIR
+        value: data
+      - key: AUTO_TRAIN
+        value: "1"
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PW
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: SESSION_HOURS
+        value: "12"

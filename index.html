@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Integrated Dynamic BioProcessing (IDB) — mAb digital twin</title>
+<script src="/static/chart.umd.js"></script>  <!-- Chart.js 4.4.1 (MIT), bundled so no CDN is needed -->
+<style>
+:root{--bg:#f4f6f9;--card:#fff;--bd:#e3e7ee;--t1:#16202c;--t2:#5b6675;--ac:#0e7c7b;--er:#b42318}
+*{box-sizing:border-box}
+body{margin:0;font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--t1)}
+header{padding:18px 22px 4px;max-width:1400px;margin:0 auto}
+h1{font-size:20px;margin:0 0 4px}
+header p{margin:0;color:var(--t2)}
+.top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
+.who{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--t2)}
+.who[hidden]{display:none}
+.who form{margin:0}
+.who button{padding:6px 12px;font-size:12px}
+main{padding:6px 22px 40px;max-width:1400px;margin:0 auto}
+.bar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:10px 0}
+button{background:var(--ac);color:#fff;border:0;border-radius:8px;padding:8px 14px;font-weight:600;cursor:pointer;font-size:13px}
+button.ghost{background:#fff;color:var(--ac);border:1px solid var(--ac)}
+button:disabled{opacity:.5;cursor:wait}
+input[type=number],input[type=text],select{padding:4px 6px;border:1px solid var(--bd);border-radius:6px;font-size:12px;background:#fff}
+input[type=number],input[type=text]{width:96px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:12px 14px;margin:10px 0}
+summary{cursor:pointer;font-weight:600}
+.pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px;margin-top:10px}
+fieldset{border:1px solid var(--bd);border-radius:8px;padding:8px 10px}
+legend{font-weight:600;color:var(--ac);padding:0 4px}
+fieldset label{display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:11.5px;color:var(--t2);margin:3px 0}
+.dist{display:block;margin-top:10px;font-weight:600}
+textarea{width:100%;font-family:ui-monospace,Menlo,monospace;font-size:12px;border:1px solid var(--bd);border-radius:6px;padding:6px;margin-top:4px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px;margin:10px 0}
+.kpi{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:10px 12px}
+.kpi .l{font-size:11px;color:var(--t2)}
+.kpi .v{font-size:19px;font-weight:700}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(440px,100%),1fr));gap:10px}
+.chart{height:260px;position:relative}
+h3{font-size:13px;margin:0 0 8px}
+table{width:100%;border-collapse:collapse;font-size:12px}
+td,th{padding:4px 6px;border-bottom:1px solid var(--bd);text-align:left;vertical-align:top}
+.scroll{overflow-x:auto}
+.scroll th,.scroll td{white-space:nowrap}
+.muted{color:var(--t2)}
+.err{color:var(--er);font-weight:600}
+.note{margin:3px 0}
+</style>
+</head>
+<body>
+<header>
+  <div class="top">
+    <h1>Integrated Dynamic BioProcessing (IDB) — mAb digital twin</h1>
+    <div class="who" id="who" hidden>
+      <span id="whoName"></span>
+      <form method="post" action="/logout"><button type="submit" class="ghost">Log out</button></form>
+    </div>
+  </div>
+  <p>N-1 perfusion seed → N reactor (feed in = cells + broth + product out) → TFF cell removal → harvest sump → Protein A → low-pH VI → CEX/AEX → virus filter → SPTFF.
+     Buffer and wastewater follow the grams recovered each day, driven by the molecule's permeate titre curve. Day axis = campaign day (N-1 first, then N).</p>
+</header>
+<main>
+  <div class="bar">
+    <button id="runBtn">Run simulation</button>
+    <label>Molecule <select id="molecule"></select></label>
+    <label>Upstream <select id="upMode">
+      <option value="profile">IDB: titre curve</option>
+      <option value="mechanistic">Legacy ATF perfusion model</option></select></label>
+    <label>Capture <select id="capMode">
+      <option value="batch">Standard (batch) Protein A</option>
+      <option value="pcc">3-column PCC</option></select></label>
+    <label><input type="checkbox" id="useFc" checked> NevAI forecasts</label>
+    <label>Seed <input id="seed" type="number" value="1"></label>
+    <button id="trainBtn" class="ghost">Train NevAI</button>
+    <span id="aiState" class="muted"></span>
+    <span id="status" class="muted"></span>
+  </div>
+
+  <details class="card" id="paramPanel">
+    <summary>Parameters (defaults are illustrative — replace with site data)</summary>
+    <div id="paramForm"></div>
+    <label class="dist">Disturbances (JSON list; day = N day)
+      <textarea id="dist" rows="2">[]</textarea>
+    </label>
+    <div class="muted">Types: qp_step (factor; scales the titre curve in IDB mode), feed_glucose_step (factor) and vcd_sensor_bias (bias) for the legacy model. Example: [{"type": "qp_step", "day": 10, "factor": 0.85}]</div>
+    <label class="dist">Custom titre curve (JSON [[N day, g/L], …]; pick "Custom curve" as the molecule)
+      <textarea id="customPts" rows="2">[]</textarea>
+    </label>
+  </details>
+
+  <div id="kpis" class="kpis"></div>
+  <div id="notes" class="card"></div>
+
+  <div class="grid">
+    <div class="card"><h3>Permeate titre and NevAI 24 h forecast</h3><div class="chart"><canvas id="cTitre"></canvas></div></div>
+    <div class="card"><h3>Product harvested and Protein A cycles per day</h3><div class="chart"><canvas id="cGrams"></canvas></div></div>
+    <div class="card"><h3>Buffer per day by unit operation</h3><div class="chart"><canvas id="cBuffer"></canvas></div></div>
+    <div class="card"><h3>Buffer next 24 h: NevAI forecast vs actual</h3><div class="chart"><canvas id="cBufFc"></canvas></div></div>
+    <div class="card"><h3>Harvest sump</h3><div class="chart"><canvas id="cSump"></canvas></div></div>
+    <div class="card"><h3>Cells: N-1 seed and N reactor</h3><div class="chart"><canvas id="cCells"></canvas></div></div>
+    <div class="card"><h3>Viral inactivation pH and eluate surge</h3><div class="chart"><canvas id="cVi"></canvas></div></div>
+    <div class="card"><h3>Wastewater flow and NevAI forecast</h3><div class="chart"><canvas id="cWw"></canvas></div></div>
+  </div>
+  <div class="card"><h3>Daily wastewater by stream</h3><div class="chart" style="height:320px"><canvas id="cDaily"></canvas></div></div>
+
+  <div class="card"><h3>Portfolio sizing across molecules (same settings)</h3>
+    <div id="pfNotes"></div><div class="scroll"><table id="portfolio"></table></div></div>
+
+  <div class="grid">
+    <div class="card"><h3>Wastewater streams</h3><table id="streams"></table></div>
+    <div class="card"><h3>Where product was lost</h3><table id="losses"></table>
+      <h3 style="margin-top:12px">Wastewater by driver</h3><table id="drivers"></table>
+      <h3 style="margin-top:12px">Wastewater by route</h3><table id="routes"></table></div>
+  </div>
+  <div class="card"><h3>Events and alarms</h3><table id="events"></table></div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const C = ['#0e7c7b', '#7dd3c8', '#2563eb', '#d97706', '#7c3aed', '#dc2626'];
+const PAL = ['#0e7c7b', '#2563eb', '#d97706', '#7c3aed', '#dc2626', '#16a34a', '#0891b2',
+             '#a16207', '#db2777', '#64748b', '#4f46e5', '#059669', '#ea580c', '#9333ea', '#0f766e', '#be123c'];
+const CH = {};
+const SECTIONS = {n1: 'N-1 seed (media in = permeate to waste)', upstream: 'N reactor and TFF (IDB)',
+                  capture: 'Protein A capture', vi: 'Viral inactivation', polish: 'Polishing and virus filter',
+                  sptff: 'SPTFF and formulation', pat: 'PAT sensor noise', bioreactor: 'Legacy ATF perfusion model',
+                  surge: 'Harvest surge (PCC mode)', pcc: 'PCC (PCC mode)', control: 'Control layer'};
+const SKIP = new Set(['upstream.mode', 'upstream.molecule', 'upstream.custom_points', 'capture.mode']);
+let OPS = ['capture', 'vi', 'cex', 'aex', 'vf', 'sptff'];
+const KPIS = [
+  ['Drug substance', 'drug_substance_kg', ' kg'], ['Overall yield', 'overall_yield_pct', ' %'],
+  ['N seed from N-1', 'n1_seed_vcd', ' ×10⁶/mL'], ['Final permeate titre', 'final_titre_gL', ' g/L'],
+  ['First capture cycle', 'first_cycle_n_day', ' (N day)'], ['Permeate before 1st cycle', 'first_cycle_sump_L', ' L'],
+  ['Capture cycles', 'capture_cycles', ''], ['Peak cycles / day', 'peak_cycles_day', ''],
+  ['Capture wait', 'capture_wait_h', ' h'], ['Buffer used', 'buffer_m3', ' m³'],
+  ['Buffer per g DS', 'buffer_L_per_g_ds', ' L/g'], ['Peak buffer day', 'buffer_daily_peak_L', ' L'],
+  ['Wastewater', 'wastewater_m3', ' m³'], ['Wastewater per kg DS', 'wastewater_m3_per_kg_ds', ' m³/kg'],
+  ['WW volume-driven', 'ww_volume_driven_pct', ' %'], ['WW mass-driven', 'ww_mass_driven_pct', ' %'],
+  ['NevAI buffer forecast error', 'nevai_buffer_forecast_mape_pct', ' %'],
+  ['NevAI next-load error', 'nevai_switch_forecast_mae_h', ' h']
+];
+
+async function api(path, body) {
+  const opt = body === undefined ? {} :
+    {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)};
+  const r = await fetch(path, opt);
+  if (r.status === 401) {   // session expired or signed out in another tab
+    location.href = '/login?next=' + encodeURIComponent(location.pathname);
+    throw new Error('Signed out');
+  }
+  let j;
+  try { j = await r.json(); } catch (e) { j = {ok: false, error: 'HTTP ' + r.status}; }
+  if (!r.ok || j.ok === false) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+
+function setStatus(t, err) { const s = $('status'); s.textContent = t; s.className = err ? 'err' : 'muted'; }
+const fmt = v => (v === null || v === undefined) ? '—' : (typeof v === 'number' ? v.toLocaleString() : v);
+
+function field(sec, k, v) {
+  const a = `data-sec="${sec}" data-k="${k}"`;
+  if (typeof v === 'boolean') return `<label>${k}<input ${a} type="checkbox" ${v ? 'checked' : ''}></label>`;
+  if (typeof v === 'number') return `<label>${k}<input ${a} type="number" step="any" value="${v}"></label>`;
+  if (typeof v === 'string') return `<label>${k}<input ${a} type="text" value="${v}"></label>`;
+  return '';
+}
+
+function buildForm(p) {
+  let h = '<div class="pgrid"><fieldset><legend>Run</legend>' +
+          field('', 'run_days', p.run_days) + field('', 'lot_window_h', p.lot_window_h) + '</fieldset>';
+  for (const [sec, title] of Object.entries(SECTIONS)) {
+    h += '<fieldset><legend>' + title + '</legend>';
+    for (const [k, v] of Object.entries(p[sec] || {})) if (!SKIP.has(sec + '.' + k)) h += field(sec, k, v);
+    h += '</fieldset>';
+  }
+  $('paramForm').innerHTML = h + '</div>';
+}
+
+function gather() {
+  const p = {};
+  document.querySelectorAll('#paramForm input').forEach(i => {
+    let v;
+    if (i.type === 'checkbox') v = i.checked;
+    else if (i.type === 'number') { v = parseFloat(i.value); if (isNaN(v)) return; }
+    else v = i.value;
+    if (i.dataset.sec) (p[i.dataset.sec] = p[i.dataset.sec] || {})[i.dataset.k] = v;
+    else p[i.dataset.k] = v;
+  });
+  p.upstream = Object.assign(p.upstream || {}, {mode: $('upMode').value, molecule: $('molecule').value});
+  p.capture = Object.assign(p.capture || {}, {mode: $('capMode').value});
+  try { p.disturbances = JSON.parse($('dist').value || '[]'); }
+  catch (e) { throw new Error('Disturbances must be valid JSON, e.g. []'); }
+  try { p.upstream.custom_points = JSON.parse($('customPts').value || '[]'); }
+  catch (e) { throw new Error('Custom titre curve must be valid JSON, e.g. [[0, 0.3], [14, 4.5]]'); }
+  return p;
+}
+
+const pts = (S, k, shift) => S.filter(r => r[k] !== null && r[k] !== undefined)
+                              .map(r => ({x: r.day + (shift || 0), y: r[k]}));
+
+function ds(label, data, color, extra) {
+  return Object.assign({label, data, borderColor: color, backgroundColor: color,
+                        borderWidth: 1.6, pointRadius: 0}, extra || {});
+}
+
+function line(id, datasets, yTitle, y2Title) {
+  if (CH[id]) CH[id].destroy();
+  const scales = {x: {type: 'linear', title: {display: true, text: 'day'}},
+                  y: {title: {display: true, text: yTitle}}};
+  if (y2Title) scales.y2 = {position: 'right', title: {display: true, text: y2Title}, grid: {drawOnChartArea: false}};
+  CH[id] = new Chart($(id), {type: 'line', data: {datasets},
+    options: {animation: false, parsing: false, responsive: true, maintainAspectRatio: false,
+              interaction: {mode: 'nearest', intersect: false},
+              plugins: {legend: {labels: {boxWidth: 12, font: {size: 11}}}}, scales}});
+}
+
+function bars(id, labels, datasets, yTitle, y2Title, stacked) {
+  if (CH[id]) CH[id].destroy();
+  const scales = {x: {stacked: !!stacked, title: {display: true, text: 'day'}},
+                  y: {stacked: !!stacked, beginAtZero: true, title: {display: true, text: yTitle}}};
+  if (y2Title) scales.y2 = {position: 'right', beginAtZero: true, title: {display: true, text: y2Title},
+                            grid: {drawOnChartArea: false}};
+  CH[id] = new Chart($(id), {type: 'bar', data: {labels, datasets},
+    options: {animation: false, responsive: true, maintainAspectRatio: false,
+              plugins: {legend: {labels: {boxWidth: 10, font: {size: 10}}}}, scales}});
+}
+
+function stacked(w) {
+  const keys = Object.keys(w.streams).filter(k => w.daily.some(d => d['L_' + k] > 0));
+  bars('cDaily', w.daily.map(d => d.day),
+       keys.map((k, i) => ({label: k.replace(/_/g, ' '), data: w.daily.map(d => d['L_' + k] / 1000),
+                            backgroundColor: PAL[i % PAL.length], stack: 's'})), 'm³/day', null, true);
+}
+
+function renderDesign(d) {
+  const n1 = d.n1 || {};
+  const seed = n1.enabled
+    ? `N-1: ${n1.days} d at ${n1.VVD} VVD → ${n1.waste_L} L to waste, seeds N at ${n1.n_seed_vcd} ×10⁶/mL · `
+    : `N-1 off, N seed ${n1.n_seed_vcd} ×10⁶/mL · `;
+  let summary;
+  if (d.mode === 'profile') {
+    summary = seed + `${d.molecule_label}: permeate ${d.permeate_L_day} L/day · first cycle on N day ${fmt(d.first_cycle_n_day)} ` +
+      `after ${fmt(d.first_cycle_sump_L)} L · peak ${d.peak_g_day} g/day on day ${d.peak_day} = ${d.peak_cycles_day} cycles/day ` +
+      `(column limit ${d.max_cycles_day_at_peak}) · buffer ${d.buffer_L_per_g.total.toFixed(2)} L/g, peak ${d.peak_buffer_L_day} L/day · ≈ ${d.ds_kg_est} kg DS`;
+  } else {
+    summary = seed + `perfusion ${d.perfusion_VVD} VVD · bleed ${d.bleed_pct_of_feed}% of feed · harvest titre ${d.harvest_titre_gL} g/L · ` +
+      `capture fill ${d.capture_fill_h} h vs recovery ${d.capture_recovery_h} h · ${d.ds_kg_day} kg DS/day`;
+  }
+  let h = '<h3>Design check</h3>' + d.notes.map(n => `<div class="note">${n}</div>`).join('') +
+          `<div class="note muted">${summary}</div>`;
+  if (d.daily && d.daily.length) {
+    const row = (label, key) => `<tr><th>${label}</th>` + d.daily.map(r => `<td>${fmt(r[key])}</td>`).join('') + '</tr>';
+    h += '<h3 style="margin-top:12px">Daily plan from the titre curve (noise-free)</h3><div class="scroll"><table>' +
+         row('N day', 'n_day') + row('Titre g/L', 'titre_gL') + row('Product g', 'g') + row('Capture cycles', 'cycles') +
+         row('Capture buffer L', 'capture_buffer_L') + row('All buffer L', 'buffer_L') + '</table></div>';
+  }
+  $('notes').innerHTML = h;
+}
+
+function renderPortfolio(pf) {
+  $('pfNotes').innerHTML = pf.notes.map(n => `<div class="note">${n}</div>`).join('');
+  $('portfolio').innerHTML = '<tr><th>Molecule</th><th>Peak g/day</th><th>Peak day</th><th>Peak cycles/day</th>' +
+    '<th>Column limit/day</th><th>First cycle (N day)</th><th>Permeate before 1st cycle L</th>' +
+    '<th>Peak buffer L/day</th><th>% of sizing case</th><th>Product g (run)</th></tr>' +
+    pf.rows.map(r => `<tr><td>${r.label}</td><td>${fmt(r.peak_g_day)}</td><td>${fmt(r.peak_day)}</td>` +
+      `<td>${fmt(r.peak_cycles_day)}</td><td>${fmt(r.max_cycles_day_at_peak)}</td><td>${fmt(r.first_cycle_n_day)}</td>` +
+      `<td>${fmt(r.first_cycle_sump_L)}</td><td>${fmt(r.peak_buffer_L_day)}</td><td>${fmt(r.pct_of_buffer_sizing)}</td>` +
+      `<td>${fmt(r.total_g)}</td></tr>`).join('');
+}
+
+function tables(j) {
+  const w = j.wastewater;
+  $('streams').innerHTML = '<tr><th>Stream</th><th>Driver</th><th>Route</th><th>m³</th><th>Description</th></tr>' +
+    Object.entries(w.by_stream_m3).filter(([k, v]) => v > 0).sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => `<tr><td>${k.replace(/_/g, ' ')}</td><td>${w.streams[k].driver}</td><td>${w.streams[k].route}</td>` +
+                       `<td>${v}</td><td>${w.streams[k].desc}</td></tr>`).join('');
+  $('drivers').innerHTML = '<tr><th>Driver</th><th>m³</th></tr>' +
+    Object.entries(w.by_driver_m3).map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+  $('routes').innerHTML = '<tr><th>Route</th><th>m³</th></tr>' +
+    Object.entries(w.by_route_m3).map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+  $('losses').innerHTML = '<tr><th>Loss point</th><th>g</th></tr>' +
+    Object.entries(j.kpi.losses_g).filter(([k, v]) => v > 0)
+      .map(([k, v]) => `<tr><td>${k.replace(/_/g, ' ')}</td><td>${v.toLocaleString()}</td></tr>`).join('');
+  $('events').innerHTML = '<tr><th>Day</th><th>Type</th><th>Message</th></tr>' +
+    (j.events.length ? j.events.map(e => `<tr><td>${e.day}</td><td>${e.type}</td><td>${e.msg}</td></tr>`).join('')
+                     : '<tr><td colspan="3" class="muted">No events</td></tr>');
+}
+
+function render(j) {
+  const k = j.kpi;
+  $('kpis').innerHTML = KPIS.map(([l, key, u]) =>
+    `<div class="kpi"><div class="l">${l}</div><div class="v">${k[key] === null || k[key] === undefined ? '—' : k[key] + u}</div></div>`).join('');
+  renderDesign(j.design);
+  const S = j.series, W = j.wastewater, D = W.daily, days = D.map(d => d.day);
+  line('cTitre', [ds('Permeate titre', pts(S, 'titre_harvest'), C[0]),
+                  ds('Measured (PAT)', pts(S, 'titre_meas'), C[1], {borderWidth: 0.8}),
+                  ds('NevAI forecast (+24 h)', pts(S, 'titre_fc_24h', 1), C[4], {showLine: false, pointRadius: 2})], 'g/L');
+  bars('cGrams', days, [
+    {label: 'Product harvested g/day', data: D.map(d => d.harvest_g), backgroundColor: C[0]},
+    {type: 'line', label: 'Protein A cycles/day', data: D.map(d => d.cycles), borderColor: C[4],
+     backgroundColor: C[4], yAxisID: 'y2', pointRadius: 2, borderWidth: 1.6}], 'g/day', 'cycles/day');
+  bars('cBuffer', days, OPS.map((op, i) => ({label: op, data: D.map(d => d['buf_' + op]),
+                                             backgroundColor: PAL[i % PAL.length], stack: 'b'})), 'L/day', null, true);
+  line('cBufFc', [ds('Actual buffer, next 24 h', pts(S, 'buffer_next24_L'), C[0]),
+                  ds('NevAI forecast, next 24 h', pts(S, 'buffer_fc_24h_L'), C[4], {showLine: false, pointRadius: 2})], 'L');
+  line('cSump', [ds('Sump volume L', pts(S, 'sump_L'), C[0]),
+                 ds('Product in sump g', pts(S, 'sump_g'), C[3], {yAxisID: 'y2'})], 'L', 'g');
+  line('cCells', [ds('N-1 VCD', pts(S, 'X_n1'), C[2]), ds('N VCD (legacy model)', pts(S, 'Xv'), C[0]),
+                  ds('Viability %', S.filter(r => r.viability !== null && r.viability !== undefined)
+                       .map(r => ({x: r.day, y: r.viability * 100})), C[3], {yAxisID: 'y2'})],
+       '×10⁶ cells/mL', 'viability %');
+  line('cVi', [ds('VI pH', pts(S, 'vi_pH'), C[3]),
+               ds('Eluate surge L', pts(S, 'eluate_surge_L'), C[0], {yAxisID: 'y2'})], 'pH', 'L');
+  line('cWw', [ds('Wastewater L/h', pts(S, 'ww_total_Lh'), C[5]),
+               ds('NevAI next-24 h average L/h', S.filter(r => r.ww_fc_24h_L !== null && r.ww_fc_24h_L !== undefined)
+                   .map(r => ({x: r.day, y: r.ww_fc_24h_L / 24})), C[4], {showLine: false, pointRadius: 2})], 'L/h');
+  stacked(W);
+  tables(j);
+}
+
+async function run() {
+  $('runBtn').disabled = true;
+  setStatus('Running…');
+  try {
+    const params = gather();
+    const j = await api('/api/icb/simulate', {params, seed: +$('seed').value || 0,
+                                              downsample_h: 2, use_forecaster: $('useFc').checked});
+    render(j);
+    setStatus('Done' + (j.forecaster_used ? ' · NevAI forecasts on' : ' · NevAI off (not trained yet, training, or unticked)'));
+    api('/api/icb/portfolio', {params}).then(renderPortfolio)
+      .catch(e => { $('pfNotes').textContent = e.message; });
+  } catch (e) { setStatus(e.message, true); }
+  finally { $('runBtn').disabled = false; }
+}
+
+let pollT = null;
+async function refreshAI() {
+  try {
+    const s = await api('/api/icb/nevai/status');
+    const t = s.training || {};
+    $('aiState').textContent = t.running ? 'NevAI: training… (a minute or two locally, longer on Render free)'
+      : s.ready ? 'NevAI: ready (trained ' + (s.titre.last_trained || '') + ')'
+      : t.error ? 'NevAI: training failed – ' + t.error : 'NevAI: not trained';
+    clearTimeout(pollT);
+    if (t.running) pollT = setTimeout(refreshAI, 5000);
+  } catch (e) { $('aiState').textContent = 'NevAI status unavailable'; }
+}
+
+async function trainAI() {
+  try {
+    let params;
+    try { params = gather(); } catch (e) { params = undefined; }
+    const r = await api('/api/icb/nevai/train', params ? {params} : {});
+    setStatus(r.started ? 'NevAI training started' : 'NevAI training already running');
+  } catch (e) { setStatus(e.message, true); }
+  refreshAI();
+}
+
+async function init() {
+  api('/api/me').then(m => {
+    if (m.auth && m.user) { $('whoName').textContent = 'Signed in as ' + m.user; $('who').hidden = false; }
+  }).catch(() => {});
+  const def = await api('/api/icb/defaults');
+  OPS = def.buffer_ops || OPS;
+  buildForm(def.params);
+  $('molecule').innerHTML = Object.entries(def.profiles).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join('') +
+                            '<option value="custom">Custom curve</option>';
+  $('molecule').value = def.params.upstream.molecule;
+  $('upMode').value = def.params.upstream.mode;
+  $('capMode').value = def.params.capture.mode;
+  $('runBtn').onclick = run;
+  $('trainBtn').onclick = trainAI;
+  $('molecule').onchange = () => {   // the custom curve box lives in the Parameters panel
+    if ($('molecule').value === 'custom') { $('paramPanel').open = true; $('customPts').focus(); }
+  };
+  refreshAI();
+  run();
+}
+init().catch(e => setStatus(e.message, true));
+</script>
+</body>
+</html>
