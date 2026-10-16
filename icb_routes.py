@@ -7,15 +7,19 @@ NavNevAI_mAbWasteWater · CarbonTesseract 2026
   POST /api/icb/portfolio       buffer / sump sizing across all molecules
   POST /api/icb/simulate        dynamic run {"params", "seed", "downsample_h", "use_forecaster"}
   POST /api/icb/forecast        run, then NevAI 24 h bands for titre and wastewater
-  GET  /api/icb/nevai/status    model state + background training state
+  GET  /api/icb/nevai/status    model state, weights on disk, training state, why_off
   POST /api/icb/nevai/train     start background training (returns immediately)
   POST /api/icb/nevai/ingest    hourly plant rows -> fine-tune both forecasters
 
 Training runs in a background thread. A lock file stops several gunicorn
-workers from training at once. With AUTO_TRAIN=1 (default) training starts
-automatically when no current-version model exists.
+workers from training at once; a lock left by a worker that died is ignored.
+Weights are saved atomically, so simulations keep using the current weights
+while a retraining runs. When NevAI is not used, the response says why
+(forecaster_reason). With AUTO_TRAIN=1 (default) training starts automatically
+when no current-version model exists.
 """
 import os
+import socket
 import threading
 import time
 from flask import jsonify, request
@@ -28,15 +32,41 @@ _TRAIN = {"running": False, "started": None, "finished": None, "last": None, "er
 _TRAIN_LOCK = threading.Lock()
 _LOCKFILE = icb_nevai.ICB_DIR / ".training.lock"
 _LOCK_STALE_S = 7200
+_HOST = socket.gethostname()
 
 
 def _now():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def _pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except Exception:
+        return True          # exists but not ours, or cannot tell: assume alive
+
+
+def _lock_owner():
+    try:
+        host, _, pid = _LOCKFILE.read_text().strip().rpartition(":")
+        return host, int(pid)
+    except (OSError, ValueError):
+        return None, None
+
+
 def _lock_held():
     try:
-        return _LOCKFILE.exists() and time.time() - _LOCKFILE.stat().st_mtime < _LOCK_STALE_S
+        if not _LOCKFILE.exists():
+            return False
+        if time.time() - _LOCKFILE.stat().st_mtime >= _LOCK_STALE_S:
+            return False
+        host, pid = _lock_owner()
+        if pid and host in ("", _HOST) and not _pid_alive(pid):
+            return False     # left behind by a worker that died mid-training
+        return True
     except OSError:
         return False
 
@@ -44,9 +74,12 @@ def _lock_held():
 def _lock_claim():
     try:
         if _LOCKFILE.exists() and not _lock_held():
-            _LOCKFILE.unlink()
+            try:
+                _LOCKFILE.unlink()
+            except OSError:
+                pass
         fd = os.open(str(_LOCKFILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.write(fd, str(os.getpid()).encode())
+        os.write(fd, f"{_HOST}:{os.getpid()}".encode())
         os.close(fd)
         return True
     except FileExistsError:
@@ -82,6 +115,36 @@ def _start_training(kwargs):
     return True
 
 
+def _why_off():
+    """Plain-language reason why NevAI cannot be used right now."""
+    rep = icb_nevai.weights_report()
+    missing = [n for n in ("titre", "ww") if not (rep[n]["weights_file"] and rep[n]["meta_file"])]
+    old = [n for n in ("titre", "ww") if n not in missing
+           and rep[n]["feature_version"] != icb_nevai.FEATURE_VERSION]
+    if _TRAIN["running"] or _lock_held():
+        return "NevAI is training on the server; forecasts switch on when it finishes"
+    if missing:
+        return ("no trained weights in data/icb/ on the server (missing: " + ", ".join(missing) +
+                "); check data/icb/ is in the GitHub repo and not excluded by .gitignore, or click Train NevAI")
+    if old:
+        return "the weights in data/icb/ are from an older version; click Train NevAI"
+    if _TRAIN.get("error"):
+        return "the last training failed: " + _TRAIN["error"]
+    return "the weights in data/icb/ could not be loaded"
+
+
+def _forecaster_or_reason(use=True):
+    if not use:
+        return None, "NevAI forecasts were unticked for this run"
+    fs = icb_nevai.ICBForecasters()
+    try:
+        if fs.load():
+            return fs, None
+    except Exception as e:
+        return None, f"the weights could not be loaded ({e})"
+    return None, _why_off()
+
+
 def register_icb_routes(app, login_required=None):
     def _guard(fn):
         return login_required(fn) if callable(login_required) else fn
@@ -90,12 +153,6 @@ def register_icb_routes(app, login_required=None):
         p = ICBParams.from_dict(body.get("params"))
         p.run_days = max(3.0, min(float(p.run_days), 120.0))
         return p
-
-    def _forecaster(body):
-        if not body.get("use_forecaster", True) or _TRAIN["running"] or _lock_held():
-            return None
-        fs = icb_nevai.ICBForecasters()
-        return fs if fs.load() else None
 
     @app.route("/api/icb/defaults", methods=["GET"])
     @_guard
@@ -129,10 +186,12 @@ def register_icb_routes(app, login_required=None):
     def icb_simulate():
         try:
             body = request.get_json(force=True) or {}
-            fc = _forecaster(body)
+            fc, why = _forecaster_or_reason(bool(body.get("use_forecaster", True)))
             res = ICBSimulator(_params(body), forecaster=fc, seed=int(body.get("seed", 0))).run(
                 downsample_h=int(body.get("downsample_h", 1)))
             res["forecaster_used"] = fc is not None
+            if fc is None:
+                res["forecaster_reason"] = why
             return jsonify(res)
         except Exception as e:
             app.logger.exception("icb simulate error")
@@ -143,9 +202,9 @@ def register_icb_routes(app, login_required=None):
     def icb_forecast():
         try:
             body = request.get_json(force=True) or {}
-            fs = _forecaster({"use_forecaster": True})
+            fs, why = _forecaster_or_reason(True)
             if fs is None:
-                return jsonify({"ok": False, "error": "NevAI forecasters not trained yet"}), 400
+                return jsonify({"ok": False, "error": "NevAI not available: " + why}), 400
             res = ICBSimulator(_params(body), forecaster=fs, seed=int(body.get("seed", 0))).run(keep_history=True)
             hist = res.pop("_history")
             n = int(body.get("n_samples", 30))
@@ -164,13 +223,13 @@ def register_icb_routes(app, login_required=None):
     @app.route("/api/icb/nevai/status", methods=["GET"])
     @_guard
     def icb_nevai_status():
-        if _TRAIN["running"] or _lock_held():
-            st = {"ready": False, "titre": {}, "ww": {}}
-        else:
-            st = icb_nevai.status()
+        st = icb_nevai.status()
         training = dict(_TRAIN)
-        training["running"] = training["running"] or _lock_held()
-        return jsonify({"ok": True, **st, "training": training})
+        training["running"] = bool(training["running"] or _lock_held())
+        out = {"ok": True, **st, "training": training, "weights": icb_nevai.weights_report()}
+        if not st.get("ready"):
+            out["why_off"] = _why_off()
+        return jsonify(out)
 
     @app.route("/api/icb/nevai/train", methods=["POST"])
     @_guard
@@ -191,9 +250,9 @@ def register_icb_routes(app, login_required=None):
         try:
             body = request.get_json(force=True) or {}
             rows = body.get("rows") or []
-            fs = _forecaster({"use_forecaster": True})
+            fs, why = _forecaster_or_reason(True)
             if fs is None:
-                return jsonify({"ok": False, "error": "Train the forecasters before fine-tuning"}), 400
+                return jsonify({"ok": False, "error": "Train the forecasters before fine-tuning: " + why}), 400
             return jsonify({"ok": True,
                             "titre": fs.titre.fine_tune(rows),
                             "wastewater": fs.ww.fine_tune(rows),
@@ -202,5 +261,7 @@ def register_icb_routes(app, login_required=None):
             app.logger.exception("icb nevai ingest error")
             return jsonify({"ok": False, "error": str(e)}), 400
 
+    if _LOCKFILE.exists() and not _lock_held():          # clear a lock left by a dead worker
+        _lock_release()
     if os.environ.get("AUTO_TRAIN", "1") == "1" and not icb_nevai.ICBForecasters().load():
         _start_training({})

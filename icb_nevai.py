@@ -16,6 +16,7 @@ Train:  python3 icb_nevai.py train
 """
 from __future__ import annotations
 import json
+import os
 import sys
 import time
 import numpy as np
@@ -126,10 +127,15 @@ class Forecaster:
                 "note": "band from weight perturbation, not a calibrated interval"}
 
     def save(self):
-        np.savez_compressed(self._wpath, Wx=self.w.Wx, Wh=self.w.Wh, b=self.w.b,
+        """Write to temporary files, then rename: readers never see half-written weights."""
+        tmp_w = self._wpath.with_name(self._wpath.stem + ".tmp.npz")
+        np.savez_compressed(tmp_w, Wx=self.w.Wx, Wh=self.w.Wh, b=self.w.b,
                             Wo=self.w.Wo, bo=self.w.bo,
                             dims=np.array([self.w.input_dim, self.w.hidden_dim, self.w.horizon]))
-        self._mpath.write_text(json.dumps({**self.meta, "scale": float(self.scale)}, indent=2))
+        os.replace(tmp_w, self._wpath)
+        tmp_m = self._mpath.with_name(self._mpath.name + ".tmp")
+        tmp_m.write_text(json.dumps({**self.meta, "scale": float(self.scale)}, indent=2))
+        os.replace(tmp_m, self._mpath)
 
     def load(self):
         if not (self._wpath.exists() and self._mpath.exists()):
@@ -211,8 +217,26 @@ def train_forecasters(base_params=None, n_runs=4, epochs=8, stride=12, seed=0):
 
 def status():
     fs = ICBForecasters()
-    fs.load()
+    try:
+        fs.load()
+    except Exception:
+        pass
     return {"ready": fs.ready, "titre": fs.titre.meta, "ww": fs.ww.meta}
+
+
+def weights_report():
+    """Which weight files the server actually has (shown by /api/icb/nevai/status)."""
+    out = {"dir": str(ICB_DIR.resolve()), "expected_version": FEATURE_VERSION}
+    for name in ("titre", "ww"):
+        w, m = ICB_DIR / f"{name}_weights.npz", ICB_DIR / f"{name}_meta.json"
+        ver = None
+        if m.exists():
+            try:
+                ver = json.loads(m.read_text()).get("feature_version")
+            except Exception:
+                ver = "unreadable"
+        out[name] = {"weights_file": w.exists(), "meta_file": m.exists(), "feature_version": ver}
+    return out
 
 
 if __name__ == "__main__":
