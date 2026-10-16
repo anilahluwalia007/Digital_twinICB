@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Integrated Dynamic BioProcessing (IDB) — mAb digital twin</title>
 <script src="/static/chart.umd.js"></script>  <!-- Chart.js 4.4.1 (MIT), bundled so no CDN is needed -->
+<script src="/static/pfd.js"></script>        <!-- live process flow diagram -->
 <style>
 :root{--bg:#f4f6f9;--card:#fff;--bd:#e3e7ee;--t1:#16202c;--t2:#5b6675;--ac:#0e7c7b;--er:#b42318}
 *{box-sizing:border-box}
@@ -38,6 +39,7 @@ textarea{width:100%;font-family:ui-monospace,Menlo,monospace;font-size:12px;bord
 .kpi .v{font-size:19px;font-weight:700}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(440px,100%),1fr));gap:10px}
 .chart{height:260px;position:relative}
+.chart img.pimg{display:none;width:100%;height:100%;object-fit:contain}
 h3{font-size:13px;margin:0 0 8px}
 table{width:100%;border-collapse:collapse;font-size:12px}
 td,th{padding:4px 6px;border-bottom:1px solid var(--bd);text-align:left;vertical-align:top}
@@ -46,6 +48,46 @@ td,th{padding:4px 6px;border-bottom:1px solid var(--bd);text-align:left;vertical
 .muted{color:var(--t2)}
 .err{color:var(--er);font-weight:600}
 .note{margin:3px 0}
+/* process flow diagram */
+.pfdbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.pfdbar input[type=range]{flex:1;min-width:180px;accent-color:var(--ac)}
+#pfdBox{overflow-x:auto;border:1px solid var(--bd);border-radius:8px;background:#fff}
+#pfdBox svg{display:block;width:100%;min-width:900px;height:auto}
+#pfdNote{font-size:11.5px;margin-top:6px}
+.tblwrap{max-height:340px;overflow:auto;margin-top:8px}
+#pfdTable td:nth-child(n+3),#pfdTable th:nth-child(n+3){text-align:right;white-space:nowrap}
+#pfdTable tr.on td{background:#e6f5f3}
+#pfdTable thead th{position:sticky;top:0;background:#fff}
+/* print report (hidden on screen) */
+.print-only{display:none}
+#printHead h2{font-size:18px;margin:0 0 2px}
+.ptab{columns:3;column-gap:18px}
+.ptab table{break-inside:avoid;margin-bottom:8px;font-size:9.5px}
+.ptab th{background:#f1f5f9}
+@media print{
+  @page{size:A4 landscape;margin:10mm}
+  body{background:#fff;font-size:10.5px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  header,main{max-width:none;padding:0}
+  .no-print,.bar,#paramPanel,.who,.pfdbar,#pfdTableWrap summary{display:none!important}
+  .print-only{display:block}
+  .card{border:1px solid #cbd5e1;break-inside:avoid;margin:6px 0;padding:8px 10px}
+  #pfdCard{break-after:page}
+  #pfdBox{overflow:visible;border:0}
+  #pfdBox svg{min-width:0;max-height:170mm}
+  #pfdTableWrap{break-before:page}
+  .tblwrap{max-height:none;overflow:visible}
+  #pfdTable{font-size:9px}
+  .kpis{grid-template-columns:repeat(6,1fr);gap:6px}
+  .kpi{padding:6px 8px}.kpi .v{font-size:14px}
+  .grid{grid-template-columns:1fr 1fr}
+  .chart{height:200px}
+  .chart canvas{display:none!important}
+  .chart img.pimg{display:block}
+  .scroll{overflow:visible}
+  .scroll th,.scroll td{white-space:normal}
+  table{font-size:9.5px}
+  #printParams{break-before:page}
+}
 </style>
 </head>
 <body>
@@ -57,8 +99,9 @@ td,th{padding:4px 6px;border-bottom:1px solid var(--bd);text-align:left;vertical
       <form method="post" action="/logout"><button type="submit" class="ghost">Log out</button></form>
     </div>
   </div>
-  <p>N-1 perfusion seed → N reactor (feed in = cells + broth + product out) → TFF cell removal → harvest sump → Protein A → low-pH VI → CEX/AEX → virus filter → SPTFF.
+  <p>N-1 perfusion seed → N reactor (feed in = cells + broth + product out) → TFF cell removal → surge tank → Protein A → low-pH VI → depth filtration → AEX → CEX → virus filter → UF/DF (SPTFF) → BDS.
      Buffer and wastewater follow the grams recovered each day, driven by the molecule's permeate titre curve. Day axis = campaign day (N-1 first, then N).</p>
+  <div id="printHead" class="print-only"></div>
 </header>
 <main>
   <div class="bar">
@@ -73,6 +116,7 @@ td,th{padding:4px 6px;border-bottom:1px solid var(--bd);text-align:left;vertical
     <label><input type="checkbox" id="useFc" checked> NevAI forecasts</label>
     <label>Seed <input id="seed" type="number" value="1"></label>
     <button id="trainBtn" class="ghost">Train NevAI</button>
+    <button id="printBtn" class="ghost" title="Landscape report: diagram at the chosen hour, KPIs, charts, tables and all parameters">Print / Save as PDF</button>
     <span id="aiState" class="muted"></span>
     <span id="status" class="muted"></span>
   </div>
@@ -90,6 +134,27 @@ td,th{padding:4px 6px;border-bottom:1px solid var(--bd);text-align:left;vertical
   </details>
 
   <div id="kpis" class="kpis"></div>
+
+  <div class="card" id="pfdCard">
+    <h3>Process flow diagram — live playback of the last run</h3>
+    <div class="pfdbar">
+      <button id="pfdPlay" type="button">▶ Play</button>
+      <input id="pfdSlider" type="range" min="0" max="0" value="0" step="1" aria-label="Simulation hour">
+      <label>Speed <select id="pfdSpeed">
+        <option value="2">2 h/s</option><option value="6" selected>6 h/s</option>
+        <option value="12">12 h/s</option><option value="24">1 day/s</option><option value="72">3 days/s</option>
+      </select></label>
+      <span id="pfdClock" class="muted">—</span>
+      <button id="pfdSvg" type="button" class="ghost">Download SVG</button>
+    </div>
+    <div id="pfdBox"></div>
+    <div id="pfdNote" class="muted"></div>
+    <details id="pfdTableWrap" open>
+      <summary>Stream table (values at the hour shown)</summary>
+      <div class="tblwrap"><table id="pfdTable"></table></div>
+    </details>
+  </div>
+
   <div id="notes" class="card"></div>
 
   <div class="grid">
@@ -97,7 +162,7 @@ td,th{padding:4px 6px;border-bottom:1px solid var(--bd);text-align:left;vertical
     <div class="card"><h3>Product harvested and Protein A cycles per day</h3><div class="chart"><canvas id="cGrams"></canvas></div></div>
     <div class="card"><h3>Buffer per day by unit operation</h3><div class="chart"><canvas id="cBuffer"></canvas></div></div>
     <div class="card"><h3>Buffer next 24 h: NevAI forecast vs actual</h3><div class="chart"><canvas id="cBufFc"></canvas></div></div>
-    <div class="card"><h3>Harvest sump</h3><div class="chart"><canvas id="cSump"></canvas></div></div>
+    <div class="card"><h3>Harvest surge tank</h3><div class="chart"><canvas id="cSump"></canvas></div></div>
     <div class="card"><h3>Cells: N-1 seed and N reactor</h3><div class="chart"><canvas id="cCells"></canvas></div></div>
     <div class="card"><h3>Viral inactivation pH and eluate surge</h3><div class="chart"><canvas id="cVi"></canvas></div></div>
     <div class="card"><h3>Wastewater flow and NevAI forecast</h3><div class="chart"><canvas id="cWw"></canvas></div></div>
@@ -114,6 +179,8 @@ td,th{padding:4px 6px;border-bottom:1px solid var(--bd);text-align:left;vertical
       <h3 style="margin-top:12px">Wastewater by route</h3><table id="routes"></table></div>
   </div>
   <div class="card"><h3>Events and alarms</h3><table id="events"></table></div>
+
+  <div id="printParams" class="card print-only"></div>
 </main>
 
 <script>
@@ -127,7 +194,9 @@ const SECTIONS = {n1: 'N-1 seed (media in = permeate to waste)', upstream: 'N re
                   sptff: 'SPTFF and formulation', pat: 'PAT sensor noise', bioreactor: 'Legacy ATF perfusion model',
                   surge: 'Harvest surge (PCC mode)', pcc: 'PCC (PCC mode)', control: 'Control layer'};
 const SKIP = new Set(['upstream.mode', 'upstream.molecule', 'upstream.custom_points', 'capture.mode']);
+const CHOICES = {'polish.order': [['aex_cex', 'AEX → CEX (site PFD)'], ['cex_aex', 'CEX → AEX (legacy)']]};
 let OPS = ['capture', 'vi', 'cex', 'aex', 'vf', 'sptff'];
+let LAST = null;   // last simulation result (for the print report)
 const KPIS = [
   ['Drug substance', 'drug_substance_kg', ' kg'], ['Overall yield', 'overall_yield_pct', ' %'],
   ['N seed from N-1', 'n1_seed_vcd', ' ×10⁶/mL'], ['Final permeate titre', 'final_titre_gL', ' g/L'],
@@ -157,12 +226,16 @@ async function api(path, body) {
 
 function setStatus(t, err) { const s = $('status'); s.textContent = t; s.className = err ? 'err' : 'muted'; }
 const fmt = v => (v === null || v === undefined) ? '—' : (typeof v === 'number' ? v.toLocaleString() : v);
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 function field(sec, k, v) {
   const a = `data-sec="${sec}" data-k="${k}"`;
+  const opts = CHOICES[sec + '.' + k];
+  if (opts) return `<label>${k}<select ${a}>` +
+    opts.map(([val, lab]) => `<option value="${val}"${val === v ? ' selected' : ''}>${lab}</option>`).join('') + '</select></label>';
   if (typeof v === 'boolean') return `<label>${k}<input ${a} type="checkbox" ${v ? 'checked' : ''}></label>`;
   if (typeof v === 'number') return `<label>${k}<input ${a} type="number" step="any" value="${v}"></label>`;
-  if (typeof v === 'string') return `<label>${k}<input ${a} type="text" value="${v}"></label>`;
+  if (typeof v === 'string') return `<label>${k}<input ${a} type="text" value="${esc(v)}"></label>`;
   return '';
 }
 
@@ -179,7 +252,7 @@ function buildForm(p) {
 
 function gather() {
   const p = {};
-  document.querySelectorAll('#paramForm input').forEach(i => {
+  document.querySelectorAll('#paramForm input, #paramForm select').forEach(i => {
     let v;
     if (i.type === 'checkbox') v = i.checked;
     else if (i.type === 'number') { v = parseFloat(i.value); if (isNaN(v)) return; }
@@ -304,8 +377,8 @@ function render(j) {
                                              backgroundColor: PAL[i % PAL.length], stack: 'b'})), 'L/day', null, true);
   line('cBufFc', [ds('Actual buffer, next 24 h', pts(S, 'buffer_next24_L'), C[0]),
                   ds('NevAI forecast, next 24 h', pts(S, 'buffer_fc_24h_L'), C[4], {showLine: false, pointRadius: 2})], 'L');
-  line('cSump', [ds('Sump volume L', pts(S, 'sump_L'), C[0]),
-                 ds('Product in sump g', pts(S, 'sump_g'), C[3], {yAxisID: 'y2'})], 'L', 'g');
+  line('cSump', [ds('Surge tank volume L', pts(S, 'sump_L'), C[0]),
+                 ds('Product in surge tank g', pts(S, 'sump_g'), C[3], {yAxisID: 'y2'})], 'L', 'g');
   line('cCells', [ds('N-1 VCD', pts(S, 'X_n1'), C[2]), ds('N VCD (legacy model)', pts(S, 'Xv'), C[0]),
                   ds('Viability %', S.filter(r => r.viability !== null && r.viability !== undefined)
                        .map(r => ({x: r.day, y: r.viability * 100})), C[3], {yAxisID: 'y2'})],
@@ -317,15 +390,19 @@ function render(j) {
                    .map(r => ({x: r.day, y: r.ww_fc_24h_L / 24})), C[4], {showLine: false, pointRadius: 2})], 'L/h');
   stacked(W);
   tables(j);
+  if (window.PFD) PFD.load(j);
 }
 
 async function run() {
   $('runBtn').disabled = true;
+  if (window.PFD) PFD.pause();
   setStatus('Running…');
   try {
     const params = gather();
     const j = await api('/api/icb/simulate', {params, seed: +$('seed').value || 0,
-                                              downsample_h: 2, use_forecaster: $('useFc').checked});
+                                              downsample_h: 1, use_forecaster: $('useFc').checked});
+    LAST = j;
+    LAST.seed = +$('seed').value || 0;
     render(j);
     setStatus('Done' + (j.forecaster_used ? ' · NevAI forecasts on' : ' · NevAI off (not trained yet, training, or unticked)'));
     api('/api/icb/portfolio', {params}).then(renderPortfolio)
@@ -357,10 +434,49 @@ async function trainAI() {
   refreshAI();
 }
 
+// ── print / save as PDF ──────────────────────────────────────────────
+function paramTables(p) {
+  const tbl = (title, obj) => '<table><tr><th colspan="2">' + esc(title) + '</th></tr>' +
+    Object.entries(obj).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(typeof v === 'object' ? JSON.stringify(v) : v)}</td></tr>`).join('') +
+    '</table>';
+  let h = tbl('Run', {run_days: p.run_days, lot_window_h: p.lot_window_h,
+                      disturbances: p.disturbances && p.disturbances.length ? p.disturbances : 'none'});
+  for (const [sec, title] of Object.entries(SECTIONS)) if (p[sec]) h += tbl(title, p[sec]);
+  return '<h3>Parameters used in this run</h3><div class="ptab">' + h + '</div>';
+}
+
+function preparePrint() {
+  if (window.PFD) PFD.pause();
+  // charts -> images, so they print at the right size
+  for (const [id, ch] of Object.entries(CH)) {
+    const box = $(id).parentNode;
+    let img = box.querySelector('img.pimg');
+    if (!img) { img = document.createElement('img'); img.className = 'pimg'; img.alt = ''; box.appendChild(img); }
+    try { img.src = ch.toBase64Image('image/png', 1); } catch (e) { /* leave blank */ }
+  }
+  const p = LAST ? LAST.params : null;
+  const mol = $('molecule').selectedOptions[0] ? $('molecule').selectedOptions[0].textContent : '';
+  $('printHead').innerHTML = '<h2>IDB mAb digital twin — simulation report</h2><div class="muted">' +
+    esc([new Date().toLocaleString(), mol, $('upMode').selectedOptions[0].textContent,
+         $('capMode').selectedOptions[0].textContent,
+         p ? 'polishing ' + (p.polish.order === 'cex_aex' ? 'CEX → AEX' : 'AEX → CEX') : '',
+         'seed ' + (LAST ? LAST.seed : '—'), LAST && LAST.forecaster_used ? 'NevAI on' : 'NevAI off'].filter(Boolean).join(' · ')) +
+    '<br>Diagram shown at ' + esc(window.PFD ? PFD.clock() : '—') + '</div>';
+  $('printParams').innerHTML = p ? paramTables(p) : '<div class="muted">Run a simulation first.</div>';
+}
+
+function printReport() {
+  if (!LAST) { setStatus('Run a simulation before printing', true); return; }
+  preparePrint();
+  setTimeout(() => window.print(), 50);   // let the chart images decode
+}
+window.addEventListener('beforeprint', preparePrint);   // also covers Cmd/Ctrl + P
+
 async function init() {
   api('/api/me').then(m => {
     if (m.auth && m.user) { $('whoName').textContent = 'Signed in as ' + m.user; $('who').hidden = false; }
   }).catch(() => {});
+  if (window.PFD) PFD.init();
   const def = await api('/api/icb/defaults');
   OPS = def.buffer_ops || OPS;
   buildForm(def.params);
@@ -371,6 +487,7 @@ async function init() {
   $('capMode').value = def.params.capture.mode;
   $('runBtn').onclick = run;
   $('trainBtn').onclick = trainAI;
+  $('printBtn').onclick = printReport;
   $('molecule').onchange = () => {   // the custom curve box lives in the Parameters panel
     if ($('molecule').value === 'custom') { $('paramPanel').open = true; $('customPts').focus(); }
   };
