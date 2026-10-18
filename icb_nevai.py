@@ -10,7 +10,8 @@ Training starts on synthetic runs from icb_dynamic.py across all four
 molecules (the model learns the simulator). Hourly plant data is added with
 fine_tune(); rows need the keys in TITRE_KEYS and WW_KEYS.
 
-Feature version 2 (IDB): older saved weights are ignored and retrained.
+Feature version 3 (IDB, step-by-step Case 5 downstream): older saved weights are
+ignored and retrained.
 
 Train:  python3 icb_nevai.py train
 """
@@ -23,7 +24,7 @@ import numpy as np
 import nevai_engine as nev
 
 SEQ_LEN, HORIZON, HIDDEN = 48, 24, 32
-FEATURE_VERSION = 2
+FEATURE_VERSION = 3       # step-by-step downstream (Case 5): new wastewater pattern
 ICB_DIR = nev.DATA_DIR / "icb"
 ICB_DIR.mkdir(parents=True, exist_ok=True)
 

@@ -2,9 +2,10 @@
 
 N-1 perfusion seed (media in = cell-free permeate out to waste) → N reactor
 (feed in = cells + broth + product out) → TFF cell removal (cell concentrate to
-bio-kill) → conditioned media surge tank → standard (batch) Protein A → low-pH
-viral inactivation → depth filtration → AEX → CEX → virus filter → UF/DF (SPTFF
-with inline DF) → formulation → BDS hold → cryovault.
+bio-kill) → conditioned media surge tank → Brij-9 in-line → Protein A (columns
+1&2, 3&4) → depth filtration → Tris base/NaCl in-line → AEX → acetic acid in-line
+→ CEX → virus filtration (2 holders) → UF/DF → formulation spike → BDS hold →
+0.2 µm → cryovault. Every downstream step runs in sequence (Case 5 flowsheet).
 
 Each molecule's permeate titre curve (Figure 2) drives the process. Titre changes
 every hour, so buffer and wastewater are planned in litres per gram recovered, not
@@ -12,12 +13,15 @@ per day. The twin includes:
 
 - four digitised titre curves (purple, green, blue, red) plus a custom curve
 - one Protein A cycle each time the sump holds one column load (3-column PCC is an option)
+- every downstream step of every unit, with each named solution in litres (WFI
+  included) and the raw chemicals in kg
 - buffer per unit operation, per day and in L/g
 - wastewater by stream, route and driver (volume, mass, event)
 - NevAI (LSTM) 24 h forecasts of titre, grams, buffer and wastewater
 - portfolio sizing across all molecules (which molecule sets buffer supply, which sets the sump)
 - a live process flow diagram that follows the site flowsheet (streams 1–63) and
   plays the last run hour by hour, with a stream table and SVG download
+- a start-up film and a step-sequence film, both recordable as MP4 / WebM
 - a one-click Print / Save as PDF report (landscape: diagram, KPIs, charts, tables,
   all parameters)
 - the old ATF perfusion model (cells returned to the reactor), kept for comparison
@@ -25,16 +29,16 @@ per day. The twin includes:
 Default parameters are illustrative, and the titre curves were read off a chart
 image. Replace both with site data before relying on absolute numbers.
 
-Trained NevAI weights (feature version 2) are included in `data/icb/`, so the app
-shows forecasts immediately, locally and on Render. Weights from the older ATF/PCC
-version are ignored automatically and retrained.
+Trained NevAI weights (feature version 3) are included in `data/icb/`, so the app
+shows forecasts immediately, locally and on Render. Weights from older versions
+are ignored automatically and retrained.
 
 ## Run on a Mac
 
     python3 -m venv .venv
     source .venv/bin/activate
     pip install -r requirements.txt
-    python3 icb_dynamic.py          # quick check: prints design + KPIs
+    python3 icb_dynamic.py          # quick check: prints design, KPIs and solutions
     python3 app.py                  # open http://127.0.0.1:8000
 
 Optional: `python3 icb_nevai.py train` retrains NevAI (8 runs × 30 epochs, about
@@ -62,15 +66,36 @@ the slider to pick an hour, then **Print / Save as PDF** and choose "Save as PDF
 in the print dialog.
 
 Notes:
-- Items drawn in grey dashes (Brij-9 detergent, separate WFI lines, depth
-  filtration, on-line acid/base addition, holds in the intermediate SUMs) are on
-  the flowsheet but not in the simulator, so they show no numbers.
+- All 63 streams carry values. Each column, filter and UF/DF unit shows the step
+  it is running; a grey dashed line has no flow in the hour shown.
 - Polishing order: `polish.order` defaults to `aex_cex` (AEX then CEX, as on the
-  site PFD). Set it to `cex_aex` in the Parameters panel to reproduce earlier
-  results. Only polishing buffer and wastewater change slightly; drug substance
-  mass and the NevAI weights are unaffected.
-- The model runs one Protein A column train. The diagram alternates pairs 1&2 and
-  3&4 each cycle and swaps AEX, CEX and virus-filter duty each lot for display only.
+  site PFD). Set it to `cex_aex` in the Parameters panel for the legacy order.
+
+## Downstream, step by step (Case 5 flowsheet)
+
+`icb_dsp.py` runs every downstream unit as a recipe of steps, each with a named
+solution, volume, time and destination:
+
+- Brij-9 dosed in-line into each Protein A load (vi.mode = "detergent")
+- Protein A, 2 trains (columns 1&2, 3&4): post-load wash, wash 1, wash 2, elute,
+  strip, CIP, re-equilibrate; start-up sanitisation and benzyl alcohol storage
+- Depth filtration: new filter every 3 eluates; flush, equilibrate, filter, chase,
+  post-use flushes (solution order assumed)
+- Tris base + NaCl in-line, AEX (2 columns); acetic acid in-line, CEX (2 columns)
+- Virus filtration, 2 holders, alternating at each filter change
+- UF/DF per lot (lot_window_h): UF, DF, UF, recovery, formulation spike, CIP, storage
+- BDS hold mixer, 0.2 µm fill filter, cryovault containers
+- dsp.tail_h: the downstream keeps running after the N run to process the rest
+
+Each run returns `solutions` (litres per tote, WFI included), `chemicals` (kg),
+`vessels` (peak volumes), `lots`, and `steps` (every step with start/end hour).
+The diagram shows the current step on each unit; the start-up film shows the
+steps running now; the step sequence film plays them as a timeline and records
+MP4/WebM. Volumes and times are placeholders: replace them with the process
+description. Options kept: vi.mode = "low_ph", polish.order = "cex_aex",
+capture.mode = "pcc" (Protein A steps lumped per cycle in PCC mode).
+
+Files added: `icb_dsp.py`, `static/seqfilm.js`.
 
 ## Put it on GitHub
 
@@ -90,7 +115,8 @@ Create an empty repository on github.com (no README, no .gitignore), for example
 5. Click **Commit changes**.
 
 Check the repository shows `app.py`, `render.yaml`, `requirements.txt`,
-`templates/index.html`, `static/chart.umd.js`, `static/pfd.js` and `data/icb/`
+`templates/index.html`, `static/chart.umd.js`, `static/pfd.js`, `static/pfdvideo.js`,
+`static/seqfilm.js`, `icb_dsp.py` and `data/icb/`
 with four files. `index.html` must be in `templates/` (not `static/`): that is
 where `app.py` loads it from.
 
@@ -151,15 +177,19 @@ Notes:
 
 ## Files
 
-- `icb_process.py` — parameters, titre curves, waste streams, design check, portfolio sizing
-- `icb_dynamic.py` — hour-by-hour simulation: N-1, N + TFF, sump, capture, VI, polishing, buffer;
-  also records per-stream values for the diagram
+- `icb_process.py` — parameters, titre curves, solutions (with compositions), waste streams,
+  design check, portfolio sizing
+- `icb_dsp.py` — step-by-step downstream (Case 5 flowsheet): every unit as a recipe of steps
+- `icb_dynamic.py` — hour-by-hour simulation: N-1, N + TFF, surge tank, downstream, run-out;
+  also records per-stream values and the step log for the diagram and films
 - `icb_nevai.py` — NevAI titre and wastewater forecasters (hourly, 24 h ahead)
 - `nevai_engine.py` — NevAI LSTM core (Python 3.9+ compatible)
 - `icb_routes.py` — API routes; background training
 - `app.py` — web app entry point; login page, sessions and logout
 - `templates/index.html` — dashboard, print layout and PDF report
 - `static/pfd.js` — live process flow diagram (no external libraries)
+- `static/pfdvideo.js` — start-up film with the steps running now (MP4 / WebM)
+- `static/seqfilm.js` — step-sequence film: one lane per unit, coloured by solution
 - `static/chart.umd.js` — Chart.js 4.4.1 (MIT), bundled so no CDN is needed
 - `data/icb/` — trained NevAI weights
 - `render.yaml`, `requirements.txt`, `.python-version` — Render deployment

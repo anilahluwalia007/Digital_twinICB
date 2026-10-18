@@ -2,25 +2,16 @@
 icb_dynamic.py — Hour-by-hour simulation of the IDB line
 NavNevAI_mAbWasteWater · CarbonTesseract 2026
 
-Timeline: N-1 phase first (permeate to waste), then the N run. "day" in the
-output is campaign day; "n_day" is days since N inoculation (negative in N-1).
+Timeline: N-1 first (permeate to waste), then the N run, then a downstream run-out
+(dsp.tail_h) with the bioreactor stopped so the last product is processed.
+"day" = campaign day; "n_day" = days since N inoculation (negative in N-1).
 
-  N-1            media in = permeate out to waste; seed grows, sets N seed VCD
-  N + TFF        profile mode: titre from the molecule's permeate curve,
-                 feed = outflow, a share leaves the TFF as cell concentrate;
-                 mechanistic mode: legacy ATF perfusion model
-  Harvest sump   collects permeate; PAT titre x volume = grams in the sump
-  Capture        batch: one cycle each time the sump holds one load;
-                 pcc: 3-column PCC from a level-controlled surge
-  VI             PI acid dose; out-of-spec or short-hold material diverted
-  Polishing      AEX then CEX (polish.order), virus filter, SPTFF; buffer per gram
-  Buffer         tracked per unit operation every hour
-  NevAI          optional, advisory: 24 h titre forecast -> grams -> buffer
-
-Disturbances (N day), for example
-  {"type": "qp_step", "day": 10, "factor": 0.85}    scales titre (profile) or qP
-  {"type": "feed_glucose_step", "day": 8, "factor": 0.7}   legacy model only
-  {"type": "vcd_sensor_bias", "day": 9, "bias": 0.10}      legacy model only
+  N-1 / N + TFF   unchanged (profile = titre curve, mechanistic = legacy ATF model)
+  Harvest sump    conditioned media surge tank
+  Downstream      icb_dsp.DSP: every step of the Case 5 flowsheet, in sequence
+  Low-pH VI       legacy option (vi.mode = "low_ph"), between Protein A and depth filtration
+  PCC             legacy option (capture.mode = "pcc"), Protein A steps lumped per cycle
+  NevAI           optional, advisory: 24 h titre forecast -> grams -> solutions
 
 Quick check:  python3 icb_dynamic.py
 """
@@ -29,21 +20,21 @@ import json
 import math
 from collections import deque
 import numpy as np
-from icb_process import (ICBParams, WASTE_STREAMS, BUFFER_OPS, process_design, capture_cycle,
-                         buffer_L_per_g, titre_at, profile_points)
+from icb_process import (ICBParams, WASTE_STREAMS, BUFFER_OPS, SOLUTIONS, SOLUTION_ALIASES,
+                         process_design, capture_cycle, buffer_L_per_g, titre_at, profile_points, det_frac)
+from icb_dsp import DSP, Plant, Vessel, FLOW_KEYS, VESSEL_KEYS, LANE_KEYS, WFI_KEYS
 
-SERIES_KEYS = ["h", "day", "n_day", "phase", "X_n1", "Xv", "Xv_meas", "viability", "S",
-               "titre_harvest", "titre_meas", "sieve", "VVD", "Fb_Lh", "Fh_Lh",
-               "sump_L", "sump_g", "Fload_Lh", "cycles", "col_state",
-               "eluate_surge_L", "F_vi_Lh", "vi_pH", "acid_frac",
-               "harvest_g_h", "ds_g_cum", "buffer_L_h", "ww_total_Lh",
-               "titre_fc_24h", "switch_fc_h", "ww_fc_24h_L", "g_fc_24h", "buffer_fc_24h_L",
-               "g_next24", "buffer_next24_L"]
-# extra per-stream values for the live process flow diagram (static/pfd.js)
-SERIES_KEYS += (["Fin_Lh", "capture_switch", "ds_g_h",
-                 "L_vi", "g_vi", "L_aex", "g_aex", "L_cex", "g_cex", "L_vf", "g_vf",
-                 "L_ret", "L_df", "L_exc", "L_ds"]
-                + ["ww_" + k for k in WASTE_STREAMS] + ["buf_" + k for k in BUFFER_OPS])
+_BASE_KEYS = ["h", "day", "n_day", "phase", "X_n1", "Xv", "Xv_meas", "viability", "S",
+              "titre_harvest", "titre_meas", "sieve", "VVD", "Fb_Lh", "Fh_Lh",
+              "sump_L", "sump_g", "Fload_Lh", "cycles", "col_state",
+              "eluate_surge_L", "F_vi_Lh", "vi_pH", "acid_frac",
+              "harvest_g_h", "ds_g_cum", "buffer_L_h", "ww_total_Lh",
+              "titre_fc_24h", "switch_fc_h", "ww_fc_24h_L", "g_fc_24h", "buffer_fc_24h_L",
+              "g_next24", "buffer_next24_L"]
+SERIES_KEYS = list(dict.fromkeys(
+    _BASE_KEYS + ["Fin_Lh", "capture_switch", "ds_g_h", "usp_on", "det_Lh", "ds_L_cum"]
+    + list(FLOW_KEYS) + list(VESSEL_KEYS) + list(LANE_KEYS) + list(WFI_KEYS)
+    + ["ww_" + k for k in WASTE_STREAMS] + ["buf_" + k for k in BUFFER_OPS]))
 
 
 def _clamp(x, lo, hi):
@@ -92,24 +83,26 @@ class ICBSimulator:
     def run(self, keep_history=False, downsample_h=1):
         p = self.p
         up, n1, br, cp = p.upstream, p.n1, p.bioreactor, p.capture
-        sg, pc, vi, po, sp, pat, ct = p.surge, p.pcc, p.vi, p.polish, p.sptff, p.pat, p.control
+        sg, pc, vi, pat, ct = p.surge, p.pcc, p.vi, p.pat, p.control
         rng = self.rng
         profile = up.mode != "mechanistic"
         batch = cp.mode != "pcc"
+        lowph = vi.mode == "low_ph"
         V = br.V_L
         H1 = int(round(n1.days * 24)) if n1.enabled else 0
-        H = H1 + int(round(p.run_days * 24))
+        HN = int(round(p.run_days * 24))
+        HT = int(round(max(p.dsp.tail_h, 0.0)))
+        H = H1 + HN + HT
         n_sub, dt = 4, 0.25
         design = process_design(p)
         n1s = design["n1"]
         cyc = capture_cycle(p)
         per_g = buffer_L_per_g(p)
+        dose = det_frac(p)
         pts = profile_points(p)
         target = cyc["target_g"]
 
-        # N-1 seed
         X1 = n1.X0
-        # N reactor (cell balances used by the legacy model only)
         Xv, Xd, S, P = n1s["n_seed_vcd"], 0.0, br.S0_gL, 0.0
         sieve, dev = br.sieving0, 0.0
         sig = up.variation_sigma if profile else br.qp_ou_sigma
@@ -118,34 +111,8 @@ class ICBSimulator:
         bleed_pi = PI(ct.bleed_kc, ct.bleed_ti_h, 0.0, br.bleed_max_VVD * V / 24.0,
                       bias=0.0 if profile else (design.get("bleed_Lh") or 0.0))
         bleed_on = False
-        # harvest sump
-        Vs_sp = sg.V_max_L * sg.level_sp
-        sump_max = cp.sump_max_L if batch else sg.V_max_L
-        Vs, Ms = (0.0, 0.0) if batch else (Vs_sp, 0.0)
-        perm_L = 0.0
-        # capture
-        col, load_left, rec_left, cyc_g = 0, 0.0, 0.0, 0.0   # col: 0 idle, 1 loading, 2 recovering
-        Q_dbc = pc.DBC_gL * pc.CV_L
-        Q_sat = pc.sat_factor * Q_dbc
-        rec_timers, m_true, m_est, pending = [], 0.0, 0.0, False
-        cycles, wait_h, cycle_hours, first_cycle = 0, 0, [], None
-        n_cyc_h = 0
-        # eluate surge + VI
-        Ve = Me = 0.0
-        acid_pi = PI(ct.acid_kc, ct.acid_ti_h, 0.0, vi.acid_max, bias=vi.acid_bias)
-        acid = vi.acid_bias
-        tube = deque([[-1e9, vi.tube_V_L, 0.0, True]])   # [entry_h, L, g, conforming]
-        # polishing / drug substance
-        vf_used, vf_changes = 0.0, 0
-        ds_g = ds_L = produced_g = media_L = 0.0
-        lots = {}
-        loss = {k: 0.0 for k in ("tff_retentate", "cell_bleed", "ramp_harvest", "sump_overflow",
-                                 "capture", "breakthrough", "vi_divert", "polishing", "sptff")}
-        ww_sum = {k: 0.0 for k in WASTE_STREAMS}
-        buf = {k: 0.0 for k in BUFFER_OPS}
+
         events, alarms, alarm_hours = [], {}, []
-        history, fc_log = [], []
-        ww = {k: 0.0 for k in WASTE_STREAMS}
 
         def event(h, code, msg):
             events.append({"h": h, "day": round(h / 24, 2), "type": "event", "code": code, "msg": msg})
@@ -156,18 +123,51 @@ class ICBSimulator:
             if alarms[code] <= 3:
                 events.append({"h": h, "day": round(h / 24, 2), "type": "alarm", "code": code, "msg": msg})
 
-        def elute(h, bound):
-            nonlocal Ve, Me, cycles, n_cyc_h
-            Ve += cyc["eluate_L"]
-            Me += bound * cyc["yield"]
+        loss = {k: 0.0 for k in ("tff_retentate", "cell_bleed", "ramp_harvest", "sump_overflow", "capture",
+                                 "breakthrough", "vi", "vi_divert", "depth", "polishing", "sptff")}
+        pl = Plant(p, rng, event, alarm, loss)
+        led = pl.ledger
+        Vs_sp = sg.V_max_L * sg.level_sp
+        sump_max = cp.sump_max_L if batch else sg.V_max_L
+        sump = Vessel("sump", "Conditioned media surge tank")
+        if not batch:
+            sump.L = Vs_sp
+        dsp = DSP(pl, sump)
+        perm_L = 0.0
+        # PCC (legacy option)
+        Q_dbc = pc.DBC_gL * pc.CV_L
+        Q_sat = pc.sat_factor * Q_dbc
+        rec_timers, m_true, m_est, pending = [], 0.0, 0.0, False
+        pcc_charges = [("pa_wash1", pc.wash_CV / 2 * pc.CV_L, "capture_buffers"),
+                       ("pa_wash2", pc.wash_CV / 2 * pc.CV_L, "capture_buffers"),
+                       ("pa_strip", pc.strip_CV * pc.CV_L, "capture_strip_cip"),
+                       ("naoh_05n", pc.cip_CV * pc.CV_L, "capture_strip_cip"),
+                       ("tris_74", pc.reequil_CV * pc.CV_L, "capture_buffers")]
+        wait_h, col = 0, 0
+        # low-pH VI (legacy option)
+        acid_pi = PI(ct.acid_kc, ct.acid_ti_h, 0.0, vi.acid_max, bias=vi.acid_bias)
+        acid = vi.acid_bias
+        tube = deque([[-1e9, vi.tube_V_L, 0.0, True]])
+        vi_t0, vi_L = None, 0.0
+        produced_g = media_L = 0.0
+        ww_sum = {k: 0.0 for k in WASTE_STREAMS}
+        buf = led.buf
+        history, fc_log = [], []
+
+        def pcc_elute(h, bound):
+            dsp.pav.add(cyc["eluate_L"], bound * cyc["yield"], h + 1.0)
             loss["capture"] += bound * (1 - cyc["yield"])
-            ww["capture_buffers"] += cyc["other_buffer_waste_L"]
-            ww["capture_strip_cip"] += cyc["strip_cip_L"]
-            buf["capture"] += cyc["buffer_L"]
-            cycles += 1
-            n_cyc_h += 1
-            cycle_hours.append(h)
-            if cycles == cyc["resin_cycles_max"]:
+            for sol, L, route in pcc_charges:
+                led.use(sol, L, "capture")
+                led.waste(route, L)
+            el = pc.elute_CV * pc.CV_L
+            led.use("pa_elute", el, "capture")
+            led.waste("capture_buffers", el - cyc["eluate_L"])
+            pl.cycles += 1
+            pl.n_cyc_h += 1
+            pl.cycle_hours.append(h)
+            led.log("pa1", "Protein A (PCC)", "PCC elution", "pa_elute", "elute", h, h + 0.1, el)
+            if pl.cycles == cyc["resin_cycles_max"]:
                 event(h, "resin_life", "Protein A resin reached its cycle limit; plan replacement")
 
         for h in range(H):
@@ -175,15 +175,21 @@ class ICBSimulator:
             in_n = h >= H1
             n_h = h - H1
             n_day = n_h / 24.0
+            usp_on = in_n and n_h < HN
+            tail = in_n and not usp_on
             ww = {k: 0.0 for k in WASTE_STREAMS}
+            led.ww = ww
+            led.wfi_h = dict.fromkeys(BUFFER_OPS, 0.0)
+            pl.flow = dict.fromkeys(FLOW_KEYS, 0.0)
+            pl.h, pl.n_day, pl.n_cyc_h, pl.Fload, pl.det_L = h, n_day, 0, 0.0, 0.0
             buf0 = dict(buf)
             Fin = Fb = Fh = harv_g = 0.0
             titre_h = titre_m = Xv_m = viab = None
-            n_cyc_h = 0
             Fload_vol = 0.0
+            pH_out, F_vi, vi_on = None, 0.0, False
+            capturing = False
 
             if not in_n:
-                # ── N-1: media in = permeate out to waste ──
                 F1 = n1.VVD * n1.V_L / 24.0
                 X1 = min(X1 * math.exp(n1.mu_h), n1.X_max)
                 ww["n1_permeate"] += F1
@@ -192,325 +198,276 @@ class ICBSimulator:
                 if n_h == 0:
                     event(h, "inoculate", f"N inoculated at {n1s['n_seed_vcd']:.2f} ×10⁶ cells/mL"
                           + (f" from N-1 at {X1:.1f} ×10⁶/mL" if n1.enabled else ""))
-                qp_f, s_f, vcd_bias = self._disturb(n_day)
-                dev += -dev / tau + sig * math.sqrt(2.0 / tau) * rng.normal()
-
-                if profile:
-                    # ── IDB: feed = outflow (cells + broth + product) -> TFF ──
-                    Fin = up.VVD * V / 24.0
-                    Fb = Fin * up.tff_retentate_frac          # cell concentrate
-                    Fh = Fin - Fb                             # permeate
-                    c = titre_at(p, n_day + 0.5 / 24.0, pts) * qp_f * math.exp(dev)
-                    titre_h = c
-                    harv_g = Fh * c
-                    produced_g += Fin * c
-                    media_L += Fin
-                    ww["tff_retentate"] += Fb
-                    loss["tff_retentate"] += Fb * c
-                else:
-                    # ── legacy ATF perfusion model ──
-                    qP = br.qP_pg_cell_h * qp_f * math.exp(dev)
-                    Xv_m = max(0.0, Xv * (1 + vcd_bias + pat.vcd_noise * rng.normal()))
-                    if swap_left == 0 and sieve < br.sieve_replace_below:
-                        swap_left, atf_swaps = br.atf_swap_h, atf_swaps + 1
-                        ww["atf_flush"] += br.atf_swap_flush_L
-                        event(h, "atf_swap", f"ATF filter replaced (sieving fell to {sieve:.2f})")
-                        sieve = br.sieving0
-                    swapping = swap_left > 0
-                    if swapping:
-                        swap_left -= 1
+                if n_h == HN and HT > 0:
+                    event(h, "run_out", "N run ended; downstream runs out the remaining product")
+                if usp_on:
+                    qp_f, s_f, vcd_bias = self._disturb(n_day)
+                    dev += -dev / tau + sig * math.sqrt(2.0 / tau) * rng.normal()
+                    if profile:
+                        Fin = up.VVD * V / 24.0
+                        Fb = Fin * up.tff_retentate_frac
+                        Fh = Fin - Fb
+                        c = titre_at(p, n_day + 0.5 / 24.0, pts) * qp_f * math.exp(dev)
+                        titre_h = c
+                        harv_g = Fh * c
+                        produced_g += Fin * c
+                        media_L += Fin
+                        ww["tff_retentate"] += Fb
+                        loss["tff_retentate"] += Fb * c
                     else:
-                        Fin = _clamp(ct.CSPR_pL_cell_day * Xv_m * V * 1e-3 / 24.0,
-                                     br.VVD_min * V / 24.0, br.VVD_max * V / 24.0)
-                        if not bleed_on and Xv_m >= ct.bleed_enable_frac * br.X_setpoint:
-                            bleed_on = True
-                            event(h, "bleed_on", "VCD reached setpoint band; bleed control active")
-                        Fb = min(bleed_pi.step(Xv_m - br.X_setpoint), Fin) if bleed_on else 0.0
-                    Fh = Fin - Fb
-                    media_L += Fin
-                    bleed_g = 0.0
-                    for _ in range(n_sub):
-                        mu = br.mu_max_h * S / (br.Ks_gL + S) * max(0.0, 1.0 - Xv / br.X_max)
-                        prod = qP * Xv * 1e-3
-                        dXv = (mu - br.kd_h) * Xv - Fb / V * Xv
-                        dXd = br.kd_h * Xv - (Fb / V + br.k_lysis_h) * Xd
-                        dS = Fin / V * (br.S_feed_gL * s_f - S) - br.qS_pg_cell_h * Xv * 1e-3
-                        dP = prod - (Fh * sieve + Fb) / V * P
-                        harv_g += Fh * sieve * P * dt
-                        bleed_g += Fb * P * dt
-                        produced_g += prod * V * dt
-                        Xv, Xd = max(Xv + dXv * dt, 0.0), max(Xd + dXd * dt, 0.0)
-                        S, P = max(S + dS * dt, 0.0), max(P + dP * dt, 0.0)
-                    if not swapping:
-                        sieve = max(0.0, sieve - br.sieve_loss_per_day / 24.0)
-                    ww["cell_bleed"] += Fb
-                    loss["cell_bleed"] += bleed_g
-                    titre_h = P * sieve
-                    viab = Xv / (Xv + Xd) if (Xv + Xd) > 0 else 0.0
-                    if bleed_on and viab < ct.viability_alarm:
-                        alarm(h, "viability", f"Viability {100 * viab:.0f}% below alarm limit")
-                    if S < ct.glucose_alarm_gL:
-                        alarm(h, "glucose", f"Glucose {S:.2f} g/L: feed limiting")
-
-                titre_m = max(0.0, titre_h * (1 + pat.titre_noise * rng.normal()))
-
-                # ── harvest routing ──
-                capturing = n_day >= cp.capture_start_day
-                if capturing:
-                    Vs += Fh
-                    Ms += harv_g
-                    perm_L += Fh
-                else:
-                    ww["ramp_harvest"] += Fh
-                    loss["ramp_harvest"] += harv_g
-
-                # ── capture ──
-                if batch:
-                    budget = 1.0
-                    while budget > 1e-9:
-                        if col == 0:
-                            Cs = Ms / Vs if Vs > 1e-9 else 0.0
-                            Cs_m = max(0.0, Cs * (1 + pat.titre_noise * rng.normal()))
-                            if not (capturing and Cs_m > 1e-9 and Cs_m * Vs >= target):
-                                break
-                            load_left = min(Vs, target / Cs_m)
-                            cyc_g, col = 0.0, 1
-                            if first_cycle is None:
-                                first_cycle = {"n_day": round(n_day + (1.0 - budget) / 24.0, 2),
-                                               "sump_L": round(perm_L, 1)}
-                                event(h, "first_cycle", f"First Protein A cycle after {perm_L:.0f} L "
-                                      f"of permeate (N day {n_day:.1f})")
-                        elif col == 1:
-                            Fl = cyc["load_flow_Lh"]
-                            step = min(budget, load_left / Fl)
-                            Cs = Ms / Vs if Vs > 1e-9 else 0.0
-                            Vt = min(Fl * step, Vs, load_left)
-                            mt = Cs * Vt
-                            Vs, Ms = max(Vs - Vt, 0.0), max(Ms - mt, 0.0)
-                            load_left -= Vt
-                            cyc_g += mt
-                            Fload_vol += Vt
-                            ww["capture_flowthrough"] += Vt
-                            budget -= step
-                            if load_left <= 1e-6 or Vs <= 1e-9:
-                                if cyc_g > cyc["capacity_g"]:
-                                    loss["breakthrough"] += cyc_g - cyc["capacity_g"]
-                                    alarm(h, "capture_overload",
-                                          "Column loaded above capacity; product lost in flow-through")
-                                    cyc_g = cyc["capacity_g"]
-                                elute(h, cyc_g)
-                                col, rec_left = 2, cyc["recovery_h"]
+                        qP = br.qP_pg_cell_h * qp_f * math.exp(dev)
+                        Xv_m = max(0.0, Xv * (1 + vcd_bias + pat.vcd_noise * rng.normal()))
+                        if swap_left == 0 and sieve < br.sieve_replace_below:
+                            swap_left, atf_swaps = br.atf_swap_h, atf_swaps + 1
+                            ww["atf_flush"] += br.atf_swap_flush_L
+                            event(h, "atf_swap", f"ATF filter replaced (sieving fell to {sieve:.2f})")
+                            sieve = br.sieving0
+                        swapping = swap_left > 0
+                        if swapping:
+                            swap_left -= 1
                         else:
-                            step = min(budget, rec_left)
-                            rec_left -= step
-                            budget -= step
-                            if rec_left <= 1e-9:
-                                col = 0
-                    if col != 0 and capturing and Ms >= target:
-                        wait_h += 1
-                else:
-                    # PCC: several column switches may fall inside one hour, so the
-                    # hour is split at each switch (avoids a 1 h minimum per cycle)
+                            Fin = _clamp(ct.CSPR_pL_cell_day * Xv_m * V * 1e-3 / 24.0,
+                                         br.VVD_min * V / 24.0, br.VVD_max * V / 24.0)
+                            if not bleed_on and Xv_m >= ct.bleed_enable_frac * br.X_setpoint:
+                                bleed_on = True
+                                event(h, "bleed_on", "VCD reached setpoint band; bleed control active")
+                            Fb = min(bleed_pi.step(Xv_m - br.X_setpoint), Fin) if bleed_on else 0.0
+                        Fh = Fin - Fb
+                        media_L += Fin
+                        bleed_g = 0.0
+                        for _ in range(n_sub):
+                            mu = br.mu_max_h * S / (br.Ks_gL + S) * max(0.0, 1.0 - Xv / br.X_max)
+                            prod = qP * Xv * 1e-3
+                            dXv = (mu - br.kd_h) * Xv - Fb / V * Xv
+                            dXd = br.kd_h * Xv - (Fb / V + br.k_lysis_h) * Xd
+                            dS = Fin / V * (br.S_feed_gL * s_f - S) - br.qS_pg_cell_h * Xv * 1e-3
+                            dP = prod - (Fh * sieve + Fb) / V * P
+                            harv_g += Fh * sieve * P * dt
+                            bleed_g += Fb * P * dt
+                            produced_g += prod * V * dt
+                            Xv, Xd = max(Xv + dXv * dt, 0.0), max(Xd + dXd * dt, 0.0)
+                            S, P = max(S + dS * dt, 0.0), max(P + dP * dt, 0.0)
+                        if not swapping:
+                            sieve = max(0.0, sieve - br.sieve_loss_per_day / 24.0)
+                        ww["cell_bleed"] += Fb
+                        loss["cell_bleed"] += bleed_g
+                        titre_h = P * sieve
+                        viab = Xv / (Xv + Xd) if (Xv + Xd) > 0 else 0.0
+                        if bleed_on and viab < ct.viability_alarm:
+                            alarm(h, "viability", f"Viability {100 * viab:.0f}% below alarm limit")
+                        if S < ct.glucose_alarm_gL:
+                            alarm(h, "glucose", f"Glucose {S:.2f} g/L: feed limiting")
+                    titre_m = max(0.0, titre_h * (1 + pat.titre_noise * rng.normal()))
+
+                capturing = n_day >= cp.capture_start_day
+                pl.capturing = capturing
+                if usp_on:
+                    if capturing:
+                        sump.add(Fh, harv_g, h)
+                        perm_L += Fh
+                    else:
+                        ww["ramp_harvest"] += Fh
+                        loss["ramp_harvest"] += harv_g
+                pl.perm_L = perm_L
+
+                # ── PCC capture (legacy option) ──
+                if not batch:
+                    Vs, Ms = sump.L, sump.g
                     budget, waited = 1.0, False
-                    Fl = _clamp(Fh + (Vs - Vs_sp) / ct.surge_tau_h, 0.0, cyc["load_flow_Lh"])
+                    Fl = (cyc["load_flow_Lh"] if tail else      # run-out: empty the surge tank
+                          _clamp(Fh + (Vs - Vs_sp) / ct.surge_tau_h, 0.0, cyc["load_flow_Lh"]))
                     noise = 1 + pat.titre_noise * rng.normal()
 
                     def tick(dt_h):
-                        return [t - dt_h for t in rec_timers if t - dt_h > 1e-9]
+                        return [x - dt_h for x in rec_timers if x - dt_h > 1e-9]
 
                     while budget > 1e-9:
-                        if capturing and m_est >= target - 1e-6:
+                        last = tail and Vs <= 1e-9 and m_true > 1e-6     # run-out: elute the partial load
+                        if capturing and (m_est >= target - 1e-6 or last):
                             if len(rec_timers) <= pc.n_columns - 3:
-                                carry = pc.bt_frac * max(0.0, m_true - Q_dbc)   # sits on column 2
-                                if first_cycle is None:
-                                    first_cycle = {"n_day": round(n_day + (1.0 - budget) / 24.0, 2),
-                                                   "sump_L": round(perm_L, 1)}
+                                carry = 0.0 if last else pc.bt_frac * max(0.0, m_true - Q_dbc)
+                                if pl.first_cycle is None:
+                                    pl.first_cycle = {"n_day": round(n_day + (1.0 - budget) / 24.0, 2),
+                                                      "sump_L": round(perm_L, 1)}
                                     event(h, "first_cycle", f"First Protein A cycle after {perm_L:.0f} L "
                                           f"of permeate (N day {n_day:.1f})")
-                                elute(h, m_true - carry)
+                                pcc_elute(h, m_true - carry)
                                 rec_timers.append(cyc["recovery_h"])
                                 m_true = m_est = carry
                                 pending = False
                                 continue
-                            if not pending:
+                            if not pending and not last:
                                 pending = True
                                 alarm(h, "pcc_wait", "Lead column full but no regenerated column ready; loading paused")
-                            waited = True
-                            step = min(budget, min(rec_timers)) if rec_timers else budget
-                            rec_timers = tick(step)
-                            budget -= step
+                            waited = waited or not last
+                            stp = min(budget, min(rec_timers)) if rec_timers else budget
+                            rec_timers = tick(stp)
+                            budget -= stp
                             continue
                         Cs = Ms / Vs if Vs > 1e-9 else 0.0
                         Cs_m = max(0.0, Cs * noise)
                         if not capturing or Fl <= 1e-9 or Vs <= 1e-9 or Cs_m <= 1e-9:
                             rec_timers = tick(budget)
                             break
-                        step = min(budget, (target - m_est) / (Cs_m * Fl), Vs / Fl)
-                        Vt = Fl * step
+                        stp = min(budget, (target - m_est) / (Cs_m * Fl), Vs / Fl)
+                        Vt = Fl * stp
                         mt = Cs * Vt
                         Vs, Ms = max(Vs - Vt, 0.0), max(Ms - mt, 0.0)
                         m_true += mt
                         m_est += Cs_m * Vt
                         Fload_vol += Vt
-                        ww["capture_flowthrough"] += Vt
+                        det = Vt * dose
+                        ww["capture_flowthrough"] += Vt + det
+                        led.use("brij_10", det, "vi")
+                        pl.det_L += det
                         if m_true > Q_sat:
                             loss["breakthrough"] += m_true - Q_sat
                             m_true = Q_sat
                             alarm(h, "pcc_breakthrough", "Lead column saturated; product lost in flow-through")
-                        rec_timers = tick(step)
-                        budget -= step
+                        rec_timers = tick(stp)
+                        budget -= stp
                         if Vs <= 1e-9:
                             rec_timers = tick(budget)
                             break
                     if waited:
                         wait_h += 1
                     col = 2 if rec_timers else (1 if Fload_vol > 0 else 0)
+                    sump.L, sump.g = Vs, Ms
 
-                # ── sump limits ──
-                if Vs > sump_max:
-                    over = Vs - sump_max
-                    c = Ms / Vs
+                # ── low-pH VI (legacy option): Protein A vessel -> VI pool ──
+                cap_done = tail and sump.g <= 1e-3 and (not dsp.pa.busy() if batch else m_true <= 1e-6)
+                if lowph:
+                    pav = dsp.pav
+                    F_vi_max = vi.tube_V_L / vi.t_hold_min_h / (1 + acid)
+                    heel = 0.0 if cap_done else vi.heel_L          # run-out: drain the heel too
+                    F_vi = _clamp((pav.L - heel) / ct.eluate_tau_h, 0.0, F_vi_max)
+                    if cap_done and pav.L <= 2 * F_vi:
+                        F_vi = pav.L
+                    V_draw, m_draw = pav.take(F_vi) if F_vi > 1e-9 else (0.0, 0.0)
+                    v_out = m_out = 0.0
+                    if V_draw > 1e-9:
+                        vi_on = True
+                        led.use("vi_acid", V_draw * acid, "vi")
+                        pH_in = vi.eluate_pH_mean + vi.eluate_pH_sd * rng.normal()
+                        pH_out = pH_in - acid * vi.ph_drop_per_acid_frac
+                        pH_meas = pH_out + pat.ph_noise * rng.normal()
+                        ok = pH_out <= vi.pH_max
+                        if not ok:
+                            alarm(h, "vi_ph", f"VI pH {pH_out:.2f} above limit; material will be diverted")
+                        vol_in = V_draw * (1 + acid)
+                        tube.append([h, vol_in, m_draw, ok])
+                        acid = acid_pi.step(pH_meas - vi.pH_target)
+                    else:
+                        vol_in = 0.0
+                        if cap_done and pav.L <= 1e-4:
+                            # run-out: chase the held material out of the tube with WFI
+                            ready = 0.0
+                            for pk in tube:
+                                if pk[2] > 1e-12 and h - pk[0] < vi.t_hold_min_h - 1e-9:
+                                    break
+                                ready += pk[1]
+                            if any(pk[2] > 1e-12 for pk in tube) and ready > 1e-9:
+                                vol_in = min(ready, F_vi_max)
+                                vi_on = True
+                                led.use("wfi", vol_in, "vi")
+                                ww["vi_flush"] += vol_in      # tube drained at the end of the campaign
+                                tube.append([h, vol_in, 0.0, True])
+                    if vol_in > 1e-9:
+                        need = vol_in
+                        while need > 1e-9 and tube:
+                            pkt = tube[0]
+                            take = min(need, pkt[1])
+                            m_take = pkt[2] * take / pkt[1]
+                            pkt[1] -= take
+                            pkt[2] -= m_take
+                            need -= take
+                            if m_take <= 1e-12:
+                                ww["vi_flush"] += take
+                            elif (not pkt[3]) or (h - pkt[0]) < vi.t_hold_min_h - 1e-9:
+                                ww["vi_divert"] += take
+                                loss["vi_divert"] += m_take
+                                if pkt[3]:
+                                    alarm(h, "vi_hold", "VI residence below minimum; material diverted")
+                            else:
+                                v_out += take
+                                m_out += m_take
+                            if pkt[1] <= 1e-9:
+                                tube.popleft()
+                    if v_out > 1e-9:
+                        led.use("vi_base", v_out * vi.base_frac, "vi")
+                        m1 = m_out * vi.vi_yield
+                        loss["vi"] += m_out - m1
+                        dsp.vip.add(v_out * (1 + vi.base_frac), m1, h + 1.0)
+                    if V_draw > 1e-9 or vol_in > 1e-9:
+                        if vi_t0 is None:
+                            vi_t0, vi_L = float(h), 0.0
+                        vi_L += V_draw or vol_in
+                    elif vi_t0 is not None:
+                        led.log("vi", "Viral inactivation", "Low-pH hold", "vi_acid", "hold", vi_t0, float(h), vi_L)
+                        vi_t0 = None
+
+                # ── step-by-step downstream ──
+                dsp.upstream_quiet = ((batch or (sump.g <= 1e-3 and m_true <= 1e-6))
+                                      and not (lowph and sum(pk[2] for pk in tube) > 1e-3))
+                dsp.hour(h, tail)
+
+                if dsp.pav.L > vi.eluate_surge_max_L:
+                    alarm(h, "eluate_surge", "Protein A vessel SUM above capacity")
+                if sump.L > sump_max:
+                    over = sump.L - sump_max
+                    c = sump.g / sump.L
                     ww["sump_overflow"] += over
                     loss["sump_overflow"] += over * c
-                    Vs -= over
-                    Ms -= over * c
+                    sump.L -= over
+                    sump.g -= over * c
                     alarm(h, "sump_overflow", "Harvest sump overflowing; capture cannot keep up")
-                if batch and capturing and Fh > 0 and Vs / Fh > cp.max_sump_hold_h:
-                    alarm(h, "sump_hold", f"Mean product age in the sump about {Vs / Fh:.0f} h, "
+                sump.peak_L = max(sump.peak_L, sump.L)
+                if batch and capturing and Fh > 0 and sump.L / Fh > cp.max_sump_hold_h:
+                    alarm(h, "sump_hold", f"Mean product age in the sump about {sump.L / Fh:.0f} h, "
                           f"above the {cp.max_sump_hold_h:.0f} h hold limit")
-
-            # ── eluate surge -> continuous low-pH VI (plug flow) ──
-            if Ve > vi.eluate_surge_max_L:
-                alarm(h, "eluate_surge", "Eluate surge above capacity")
-            F_vi_max = vi.tube_V_L / vi.t_hold_min_h / (1 + acid)
-            F_vi = _clamp((Ve - vi.heel_L) / ct.eluate_tau_h, 0.0, F_vi_max)
-            V_draw = min(F_vi, Ve)
-            Ce = Me / Ve if Ve > 1e-9 else 0.0
-            m_draw = Ce * V_draw
-            Ve -= V_draw
-            Me -= m_draw
-            pH_out, v_out, m_out = None, 0.0, 0.0
-            if V_draw > 1e-9:
-                buf["vi"] += V_draw * acid
-                pH_in = vi.eluate_pH_mean + vi.eluate_pH_sd * rng.normal()
-                pH_out = pH_in - acid * vi.ph_drop_per_acid_frac
-                pH_meas = pH_out + pat.ph_noise * rng.normal()
-                ok = pH_out <= vi.pH_max
-                if not ok:
-                    alarm(h, "vi_ph", f"VI pH {pH_out:.2f} above limit; material will be diverted")
-                vol_in = V_draw * (1 + acid)
-                tube.append([h, vol_in, m_draw, ok])
-                acid = acid_pi.step(pH_meas - vi.pH_target)
-                need = vol_in
-                while need > 1e-9 and tube:
-                    pkt = tube[0]
-                    take = min(need, pkt[1])
-                    m_take = pkt[2] * take / pkt[1]
-                    pkt[1] -= take
-                    pkt[2] -= m_take
-                    need -= take
-                    if m_take <= 1e-12:
-                        ww["vi_flush"] += take
-                    elif (not pkt[3]) or (h - pkt[0]) < vi.t_hold_min_h - 1e-9:
-                        ww["vi_divert"] += take
-                        loss["vi_divert"] += m_take
-                        if pkt[3]:
-                            alarm(h, "vi_hold", "VI residence below minimum; material diverted")
-                    else:
-                        v_out += take
-                        m_out += m_take
-                    if pkt[1] <= 1e-9:
-                        tube.popleft()
-
-            # ── polishing -> VF -> UF/DF (SPTFF, inline DF) -> formulation ──
-            m_ds_h = 0.0
-            pol = dict.fromkeys(("L_vi", "g_vi", "L_aex", "g_aex", "L_cex", "g_cex",
-                                 "L_vf", "g_vf", "L_ret", "L_df", "L_exc", "L_ds"), 0.0)
-            if m_out > 0:
-                buf["vi"] += v_out * vi.base_frac
-                v_neut = v_out * (1 + vi.base_frac)
-                m1 = m_out * vi.vi_yield
-                pol.update(L_vi=v_neut, g_vi=m1)
-                if po.order != "cex_aex":
-                    # AEX flow-through, then CEX bind/elute (order on the site PFD)
-                    ww["aex_buffers"] += m1 * po.aex_buffer_L_per_g
-                    buf["aex"] += m1 * po.aex_buffer_L_per_g
-                    m2 = m1 * po.aex_yield
-                    v2 = v_neut * (1 + po.aex_flush_frac)
-                    ww["cex_flowthrough"] += v2
-                    ww["cex_buffers"] += m2 * po.cex_buffer_L_per_g
-                    buf["cex"] += m2 * po.cex_buffer_L_per_g
-                    m3 = m2 * po.cex_yield
-                    v3 = m3 / po.cex_pool_gL
-                    pol.update(L_aex=v2, g_aex=m2, L_cex=v3, g_cex=m3)
-                else:
-                    # legacy order: CEX bind/elute, then AEX flow-through
-                    ww["cex_flowthrough"] += v_neut
-                    ww["cex_buffers"] += m1 * po.cex_buffer_L_per_g
-                    buf["cex"] += m1 * po.cex_buffer_L_per_g
-                    m2 = m1 * po.cex_yield
-                    v2 = m2 / po.cex_pool_gL
-                    ww["aex_buffers"] += m2 * po.aex_buffer_L_per_g
-                    buf["aex"] += m2 * po.aex_buffer_L_per_g
-                    m3 = m2 * po.aex_yield
-                    v3 = v2 * (1 + po.aex_flush_frac)
-                    pol.update(L_cex=v2, g_cex=m2, L_aex=v3, g_aex=m3)
-                vf_used += v3
-                if vf_used >= po.vf_capacity_L:
-                    vf_used -= po.vf_capacity_L
-                    vf_changes += 1
-                    ww["vf_flush"] += po.vf_flush_L
-                    buf["vf"] += po.vf_flush_L
-                    event(h, "vf_change", "Virus filter changed (capacity reached)")
-                m4 = m3 * po.vf_yield
-                m_ds_h = m4 * sp.sptff_yield
-                v_ret = m_ds_h / sp.target_gL
-                ww["sptff_permeate"] += max(0.0, v3 + sp.DV * v_ret - v_ret)
-                buf["sptff"] += v_ret * (sp.DV + sp.excipient_frac)
-                v_ds = v_ret * (1 + sp.excipient_frac)
-                pol.update(L_vf=v3, g_vf=m4, L_ret=v_ret, L_df=sp.DV * v_ret,
-                           L_exc=sp.excipient_frac * v_ret, L_ds=v_ds)
-                loss["polishing"] += m_out - m4
-                loss["sptff"] += m4 - m_ds_h
-                ds_g += m_ds_h
-                ds_L += v_ds
-                lot_id = int(max(n_h, 0) // p.lot_window_h)
-                lot = lots.setdefault(lot_id, {"lot": lot_id + 1, "g": 0.0, "L": 0.0})
-                lot["g"] += m_ds_h
-                lot["L"] += v_ds
+                if batch:
+                    loading = any(tr.load is not None for tr in dsp.pa.trains)
+                    if capturing and sump.g >= target and not loading:
+                        wait_h += 1
+                    col = 1 if loading else (2 if dsp.pa.busy() else 0)
 
             # ── record ──
             ww_h = sum(ww.values())
             for k, v in ww.items():
                 ww_sum[k] += v
-            mech = (not profile) and in_n
+            mech = (not profile) and usp_on
             rec = {
                 "h": h, "day": round(t_day, 3), "n_day": round(n_day, 3), "phase": int(in_n),
+                "usp_on": int(usp_on),
                 "X_n1": None if in_n else X1,
                 "Xv": Xv if mech else None, "Xv_meas": Xv_m, "viability": viab,
                 "S": S if mech else None, "sieve": sieve if mech else None,
                 "titre_harvest": titre_h, "titre_meas": titre_m,
                 "Fin_Lh": Fin, "Fb_Lh": Fb, "Fh_Lh": Fh, "VVD": Fin * 24.0 / V,
                 "bleed_frac": Fb / Fin if Fin > 0 else 0.0, "bleed_on": int(bleed_on),
-                "sump_L": Vs, "sump_g": Ms, "Fload_Lh": Fload_vol, "cycles": cycles,
-                "capture_switch": n_cyc_h, "col_state": col,
-                "eluate_surge_L": Ve, "F_vi_Lh": F_vi, "vi_pH": pH_out, "acid_frac": acid,
-                "harvest_g_h": harv_g, "ds_g_h": m_ds_h, "ds_g_cum": ds_g,
+                "sump_L": sump.L, "sump_g": sump.g, "Fload_Lh": Fload_vol + pl.Fload, "cycles": pl.cycles,
+                "capture_switch": pl.n_cyc_h, "col_state": col,
+                "eluate_surge_L": dsp.pav.L, "F_vi_Lh": F_vi, "vi_pH": pH_out,
+                "acid_frac": acid if lowph else 0.0, "det_Lh": pl.det_L,
+                "harvest_g_h": harv_g, "ds_g_h": pl.flow["ds_g"], "ds_g_cum": pl.ds_g, "ds_L_cum": pl.ds_L,
                 "buffer_L_h": sum(buf.values()) - sum(buf0.values()),
                 "ww_total_Lh": ww_h,
                 "ww_cells_Lh": ww["cell_bleed"] + ww["tff_retentate"] + ww["atf_flush"],
                 "titre_fc_24h": None, "switch_fc_h": None, "ww_fc_24h_L": None,
                 "g_fc_24h": None, "buffer_fc_24h_L": None,
             }
-            rec.update(pol)
+            rec.update(pl.flow)
+            rec.update(dsp.levels())
+            rec.update(dsp.lane_state(vi_on))
             for k in BUFFER_OPS:
                 rec["buf_" + k] = buf[k] - buf0[k]
+                rec["wfi_" + k] = led.wfi_h.get(k, 0.0)
             for k, v in ww.items():
                 rec["ww_" + k] = v
             history.append(rec)
 
             # ── NevAI forecasts (advisory) ──
-            if (self.fc is not None and in_n and h % self.fc_every == 0
+            if (self.fc is not None and usp_on and h % self.fc_every == 0
                     and len(history) >= self.fc.seq_len):
                 f = self.fc.forecast_all(history)
                 tf, wf = f.get("titre"), f.get("ww")
@@ -518,8 +475,8 @@ class ICBSimulator:
                     rec["titre_fc_24h"] = float(tf[-1])
                     g_fc = float(np.sum(tf)) * Fh
                     rec["g_fc_24h"] = g_fc
-                    rec["buffer_fc_24h_L"] = g_fc * per_g["total"]
-                    have = Ms if batch else m_est
+                    rec["buffer_fc_24h_L"] = g_fc * per_g["total"] + dose * Fh * 24.0
+                    have = sump.g if batch else m_est
                     remaining, cum = max(0.0, target - have), 0.0
                     for k, c in enumerate(tf):
                         cum += Fh * float(c)
@@ -533,27 +490,31 @@ class ICBSimulator:
                 if wf is not None:
                     rec["ww_fc_24h_L"] = float(np.sum(wf))
 
-        # actual next-24 h buffer and grams, to score the forecasts
+        if vi_t0 is not None:
+            led.log("vi", "Viral inactivation", "Low-pH hold", "vi_acid", "hold", vi_t0, float(H), vi_L)
+
         b = np.concatenate([[0.0], np.cumsum([r["buffer_L_h"] for r in history])])
         g = np.concatenate([[0.0], np.cumsum([r["harvest_g_h"] for r in history])])
         n = len(history)
         for i, r in enumerate(history):
-            ok = r["phase"] and i + 24 <= n
+            ok = r["usp_on"] and i + 24 <= n
             r["buffer_next24_L"] = float(b[i + 24] - b[i]) if ok else None
             r["g_next24"] = float(g[i + 24] - g[i]) if ok else None
 
-        st = dict(ds_g=ds_g, ds_L=ds_L, produced_g=produced_g, media_L=media_L, loss=loss,
-                  ww_sum=ww_sum, buf=buf, events=events, alarms=alarms, alarm_hours=alarm_hours,
-                  lots=lots, cycle_hours=cycle_hours, first_cycle=first_cycle, cycles=cycles,
-                  wait_h=wait_h, atf_swaps=atf_swaps, vf_changes=vf_changes, fc_log=fc_log,
-                  cyc=cyc, per_g=per_g, n1s=n1s)
+        in_process_g = (dsp.in_process_g() + (m_true if not batch else 0.0) + sum(pk[2] for pk in tube)
+                        + (P * V if not profile else 0.0))
+        st = dict(pl=pl, dsp=dsp, produced_g=produced_g, media_L=media_L, loss=loss, ww_sum=ww_sum,
+                  events=events, alarms=alarms, alarm_hours=alarm_hours, wait_h=wait_h,
+                  atf_swaps=atf_swaps, fc_log=fc_log, cyc=cyc, per_g=per_g, n1s=n1s, in_process_g=in_process_g)
         return self._summarise(p, design, H, history, keep_history, downsample_h, st)
 
     def _summarise(self, p, design, H, history, keep_history, downsample_h, st):
         V = p.bioreactor.V_L
-        ds_g, produced_g, media_L = st["ds_g"], st["produced_g"], st["media_L"]
-        ww_sum, buf = st["ww_sum"], st["buf"]
-        n_rows = [r for r in history if r["phase"]]
+        pl, dsp = st["pl"], st["dsp"]
+        led = pl.ledger
+        ds_g, produced_g, media_L = pl.ds_g, st["produced_g"], st["media_L"]
+        ww_sum, buf = st["ww_sum"], led.buf
+        n_rows = [r for r in history if r["usp_on"]]
         mech = p.upstream.mode == "mechanistic"
 
         daily = []
@@ -561,9 +522,14 @@ class ICBSimulator:
             rows = history[d * 24:(d + 1) * 24]
             if not rows:
                 break
+            if not any(r["phase"] for r in rows):
+                ph = "N-1"
+            elif any(r["usp_on"] for r in rows):
+                ph = "N"
+            else:
+                ph = "run-out"
             by = {k: sum(r["ww_" + k] for r in rows) for k in WASTE_STREAMS}
-            row = {"day": d + 1, "phase": "N" if any(r["phase"] for r in rows) else "N-1",
-                   "total_L": round(sum(by.values()), 1),
+            row = {"day": d + 1, "phase": ph, "total_L": round(sum(by.values()), 1),
                    "harvest_g": round(sum(r["harvest_g_h"] for r in rows), 1),
                    "cycles": sum(r["capture_switch"] for r in rows),
                    "buffer_L": round(sum(r["buffer_L_h"] for r in rows), 1),
@@ -575,6 +541,7 @@ class ICBSimulator:
                 row["buf_" + k] = round(sum(r["buf_" + k] for r in rows), 1)
             daily.append(row)
         nd = [d for d in daily if d["phase"] == "N"] or daily
+        dsd = [d for d in daily if d["phase"] != "N-1"] or daily
         cap_days = [d["total_L"] for d in nd] or [0.0]
 
         ww_total = sum(ww_sum.values())
@@ -588,8 +555,8 @@ class ICBSimulator:
             return round(100 * x / ww_total, 1) if ww_total > 0 else None
 
         buf_total = sum(buf.values())
-        bdays = [d["buffer_L"] for d in nd if d["buffer_L"] > 0]
-        ch = np.array(st["cycle_hours"], dtype=float)
+        bdays = [d["buffer_L"] for d in dsd if d["buffer_L"] > 0]
+        ch = np.array(pl.cycle_hours, dtype=float)
         errs = []
         for h_made, h_pred in st["fc_log"]:
             nxt = ch[ch > h_made]
@@ -598,7 +565,7 @@ class ICBSimulator:
         mape = [abs(r["buffer_fc_24h_L"] - r["buffer_next24_L"]) / r["buffer_next24_L"]
                 for r in history if r.get("buffer_fc_24h_L") is not None
                 and r.get("buffer_next24_L") is not None and r["buffer_next24_L"] > 1.0]
-        fcyc = st["first_cycle"] or {}
+        fcyc = pl.first_cycle or {}
         last_t = next((r["titre_harvest"] for r in reversed(history) if r["titre_harvest"] is not None), None)
         if mech:
             steady = [r for r in n_rows if r["bleed_on"]] or n_rows
@@ -607,10 +574,11 @@ class ICBSimulator:
             s_tit = round(float(np.mean([r["titre_harvest"] for r in steady])), 3) if steady else None
         else:
             s_vcd = s_via = s_tit = None
+        rep = dsp.report()
 
         kpi = {
             "drug_substance_kg": round(ds_g / 1000, 3),
-            "ds_volume_L": round(st["ds_L"], 1),
+            "ds_volume_L": round(pl.ds_L, 1),
             "product_made_kg": round(produced_g / 1000, 3),
             "overall_yield_pct": round(100 * ds_g / produced_g, 1) if produced_g > 0 else 0.0,
             "volumetric_productivity_g_L_day": round(ds_g / V / p.run_days, 3),
@@ -620,20 +588,26 @@ class ICBSimulator:
             "media_m3_per_kg_ds": round(media_L / ds_g, 2) if ds_g > 0 else None,
             "final_titre_gL": round(last_t, 3) if last_t is not None else None,
             "steady_vcd_mean": s_vcd, "steady_viability_pct": s_via, "steady_titre_gL": s_tit,
-            "capture_cycles": st["cycles"],
+            "capture_cycles": pl.cycles,
             "first_cycle_n_day": fcyc.get("n_day"),
             "first_cycle_sump_L": fcyc.get("sump_L"),
             "capture_mean_interval_h": round(float(np.mean(np.diff(ch))), 2) if ch.size > 1 else None,
             "capture_recovery_h": round(st["cyc"]["recovery_h"], 2),
             "capture_wait_h": st["wait_h"],
-            "peak_cycles_day": max((d["cycles"] for d in nd), default=0),
+            "peak_cycles_day": max((d["cycles"] for d in dsd), default=0),
             "peak_g_day": max((d["harvest_g"] for d in nd), default=0.0),
             "buffer_m3": round(buf_total / 1000, 3),
             "buffer_L_per_g_ds": round(buf_total / ds_g, 3) if ds_g > 0 else None,
             "buffer_daily_peak_L": max(bdays) if bdays else 0.0,
             "buffer_peak_to_avg": round(max(bdays) / float(np.mean(bdays)), 2) if bdays else None,
+            "detergent_L": round(led.sol.get("brij_10", 0.0), 1),
+            "wfi_m3": round(led.sol.get("wfi", 0.0) / 1000, 3),
+            "depth_filters": pl.depth_filters,
+            "vf_changes": pl.vf_changes,
+            "lots": len(pl.lots),
+            "containers": pl.containers,
+            "in_process_end_g": round(st["in_process_g"], 1),
             "atf_swaps": st["atf_swaps"],
-            "vf_changes": st["vf_changes"],
             "wastewater_m3": round(ww_total / 1000, 2),
             "wastewater_m3_per_kg_ds": round(ww_total / ds_g, 2) if ds_g > 0 else None,
             "ww_daily_avg_m3": round(float(np.mean(cap_days)) / 1000, 3),
@@ -649,6 +623,8 @@ class ICBSimulator:
             "nevai_buffer_forecast_mape_pct": round(100 * float(np.mean(mape)), 1) if mape else None,
         }
         step = max(1, int(downsample_h))
+        labels = {k: v["label"] for k, v in SOLUTIONS.items()}
+        labels.update(SOLUTION_ALIASES)
         out = {
             "ok": True, "params": p.to_dict(), "design": design, "kpi": kpi,
             "wastewater": {
@@ -661,8 +637,10 @@ class ICBSimulator:
             },
             "buffer": {"by_op_m3": {k: round(v / 1000, 4) for k, v in buf.items()},
                        "planning_L_per_g": {k: round(v, 4) for k, v in st["per_g"].items()}},
-            "lots": [{"lot": L["lot"], "g": round(L["g"], 1), "L": round(L["L"], 2)}
-                     for _, L in sorted(st["lots"].items())],
+            "lots": [{"lot": L["lot"], "day": L["day"], "g": round(L["g"], 1), "L": round(L["L"], 2),
+                      "containers": L["containers"]} for L in pl.lots],
+            "solutions": rep["solutions"], "chemicals": rep["chemicals"], "vessels": rep["vessels"],
+            "steps": rep["steps"], "lanes": rep["lanes"], "solution_labels": labels,
             "series": [{k: _rnd(r.get(k)) for k in SERIES_KEYS} for r in history[::step]],
             "events": st["events"][:300],
         }
@@ -679,3 +657,7 @@ if __name__ == "__main__":
     print(json.dumps(d, indent=2))
     print("KPIs:")
     print(json.dumps(res["kpi"], indent=2))
+    print("Solutions (L):")
+    for s in res["solutions"]:
+        print(f"  {s['L']:>10.1f}  {s['label']}")
+    print(f"Steps logged: {len(res['steps'])}")

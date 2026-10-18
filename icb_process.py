@@ -1,29 +1,28 @@
 """
 icb_process.py — Integrated Dynamic BioProcessing (IDB) for mAbs:
-flowsheet, parameters, titre curves and design checks.
+flowsheet, parameters, titre curves, solutions and design checks.
 NavNevAI_mAbWasteWater · CarbonTesseract 2026
 
 IDB (site definition)
-  N-1   perfusion seed: media in = cell-free permeate out to waste; cells stay,
-        so the seed reaches a high density.
+  N-1   perfusion seed: media in = cell-free permeate out to waste.
   N     continuous media feed; outflow = cells + broth + product (in = out).
-  TFF   removes all cells from the N outflow (cell concentrate -> bio-kill);
-        permeate (broth + product) -> harvest sump.
-  DSP   standard Protein A from the sump, one cycle each time the sump holds
-        one column load -> low-pH VI -> AEX + CEX (polish.order) -> virus filter -> SPTFF.
-        3-column PCC is kept as an option.
+  TFF   removes all cells (cell concentrate -> bio-kill); permeate -> conditioned
+        media surge tank (harvest sump).
+  DSP   Case 5 flowsheet, run step by step in icb_dsp.py:
+        Brij-9 in-line -> Protein A (columns 1&2, 3&4) -> Protein A vessel -> depth
+        filtration -> surge tank -> Tris base + NaCl in-line -> AEX (2 columns) -> AEX
+        vessel -> acetic acid in-line -> CEX (2 columns) -> CEX vessel -> virus
+        filtration (2 holders) -> VRF vessel -> UF/DF -> BDS hold mixer -> 0.2 um ->
+        cryovault containers.
+        Options kept: low-pH VI after Protein A (vi.mode = "low_ph"), CEX before AEX
+        (polish.order = "cex_aex"), 3-column PCC capture (capture.mode = "pcc").
 
-The permeate titre curve of each molecule (Figure 2) governs the process:
-titre changes every hour, so buffer and wastewater are planned in litres per
-gram recovered, not per day.
+Every solution on the flowsheet has a key in SOLUTIONS with its composition, so a
+run reports litres per solution and kilograms per raw material. Step volumes and
+times are typical placeholders, not site data. The flowsheet names the depth
+filtration solutions but not their order; the order used here is assumed.
 
-Upstream modes
-  profile      titre(t) from the molecule's permeate curve (IDB, default)
-  mechanistic  ATF perfusion with cell return and bleed control (legacy,
-               fully continuous ICB, not IDB; kept for comparison)
-
-Units: time h, volume L, mass g, cell density 1e6 cells/mL (= 1e9 cells/L),
-specific rates pg/cell/h. Defaults are illustrative, not site data.
+Units: time h, volume L, mass g, cell density 1e6 cells/mL, rates pg/cell/h.
 """
 from __future__ import annotations
 import bisect
@@ -31,10 +30,7 @@ import copy
 import math
 from dataclasses import dataclass, field, asdict, is_dataclass
 
-# Permeate titre (g/L) against N day, digitised from Figure 2. Replace with the
-# raw data. The Excel polynomial fits are not used: they only hold to day 14
-# (the purple cubic peaks at day 13.9 and reaches zero near day 21).
-# After the last point the titre is held at the last value.
+# Permeate titre (g/L) against N day, digitised from Figure 2. Replace with raw data.
 TITRE_PROFILES = {
     "purple": {"label": "Purple molecule", "points": [
         [0.0, 0.40], [0.25, 0.39], [0.75, 0.39], [1.25, 0.43], [1.75, 0.51], [2.25, 0.63],
@@ -60,37 +56,123 @@ TITRE_PROFILES = {
         [12.0, 0.76], [13.0, 0.75], [14.0, 0.74]]},
 }
 
+# ── solutions on the Case 5 flowsheet ─────────────────────────────────
+PKA_ACETIC, PKA_TRIS = 4.76, 8.07          # at 25 °C
 
+
+def _acetate(mM, pH):
+    """Sodium acetate + acetic acid at the stated total and pH (Henderson-Hasselbalch)."""
+    base = 1.0 / (1.0 + 10 ** (PKA_ACETIC - pH))
+    M = mM / 1000.0
+    return {"Sodium acetate (anhydrous)": M * base * 82.03, "Acetic acid (glacial)": M * (1 - base) * 60.05}
+
+
+def _tris(mM, pH):
+    """Tris base titrated with HCl to the stated pH."""
+    acid = 1.0 / (1.0 + 10 ** (pH - PKA_TRIS))
+    M = mM / 1000.0
+    return {"Tris base": M * 121.14, "Hydrochloric acid (as 100 % HCl)": M * acid * 36.46}
+
+
+def _nacl(mM):
+    return {"Sodium chloride": mM / 1000.0 * 58.44}
+
+
+def _mix(*parts):
+    out = {}
+    for part in parts:
+        for k, v in part.items():
+            out[k] = out.get(k, 0.0) + v
+    return out
+
+
+def _sol(label, where, g_per_L):
+    return {"label": label, "where": where, "g_per_L": g_per_L}
+
+
+_PRO = 115.13
+# grams of each raw material per litre (approximate: pH trim of arginine/phosphate not included)
+SOLUTIONS = {
+    "wfi": _sol("WFI", "All units: flushes, rinses, in-line dilution", {}),
+    "brij_10": _sol("10 %wt Brij-9 concentrate", "Detergent viral inactivation (stream 8)",
+                    {"Brij-9 (PEG-9 lauryl ether)": 100.0}),
+    "tris_74": _sol("50 mM Tris pH 7.4", "Protein A, depth filtration, AEX", _tris(50, 7.4)),
+    "pa_wash1": _sol("25 mM Tris, 0.42 M arginine, 0.5 M NaCl, 0.1 % Virodex TXR-1, pH 9.0", "Protein A wash 1",
+                     _mix(_tris(25, 9.0), {"L-arginine": 0.42 * 174.20}, _nacl(500), {"Virodex TXR-1": 1.0})),
+    "pa_wash2": _sol("25 mM sodium acetate pH 6.5", "Protein A wash 2", _acetate(25, 6.5)),
+    "pa_elute": _sol("25 mM sodium acetate pH 4.45", "Protein A elution", _acetate(25, 4.45)),
+    "pa_strip": _sol("100 mM acetic acid", "Protein A strip", {"Acetic acid (glacial)": 0.1 * 60.05}),
+    "naoh_1n": _sol("1 N sodium hydroxide (stock)",
+                    "Protein A (0.5 N in-line), depth filtration, AEX, CEX, UF/DF (and 0.1 N storage)",
+                    {"Sodium hydroxide": 40.00}),
+    "storage": _sol("2 % benzyl alcohol, 100 mM sodium acetate pH 5.0", "Protein A, AEX and CEX storage",
+                    _mix({"Benzyl alcohol": 20.0}, _acetate(100, 5.0))),
+    "df_ac50": _sol("50 mM sodium acetate pH 5.0", "Depth filtration equilibration and chase", _acetate(50, 5.0)),
+    "nacl_2m": _sol("2 M sodium chloride (stock)", "Depth filtration (0.5 M in-line), base addition before AEX",
+                    _nacl(2000)),
+    "df_arg": _sol("1 M arginine, 50 mM sodium phosphate pH 7", "Depth filtration",
+                   {"L-arginine": 174.20, "Sodium phosphate (as NaH2PO4)": 0.05 * 119.98}),
+    "tris_base_2m": _sol("2 M Tris base", "On-line base addition before AEX", {"Tris base": 2 * 121.14}),
+    "tris_nacl_74": _sol("50 mM Tris, 0.5 M NaCl, pH 7.4", "AEX and CEX strip", _mix(_tris(50, 7.4), _nacl(500))),
+    "acetic_1m": _sol("1 M acetic acid", "On-line acid addition before CEX", {"Acetic acid (glacial)": 60.05}),
+    "cex_eq": _sol("50 mM sodium acetate, 120 mM NaCl, pH 5.5", "CEX equilibration and wash",
+                   _mix(_acetate(50, 5.5), _nacl(120))),
+    "cex_elute": _sol("50 mM sodium acetate, 280 mM NaCl, pH 6.0", "CEX elution, virus filtration",
+                      _mix(_acetate(50, 6.0), _nacl(280))),
+    "uf_df1": _sol("15 mM acetate, 130 mM proline, pH 5.1", "UF/DF equilibration and diafiltration",
+                   _mix(_acetate(15, 5.1), {"L-proline": 0.130 * _PRO})),
+    "uf_df2": _sol("15 mM acetate, 113 mM proline, pH 5.30", "UF/DF recovery flush",
+                   _mix(_acetate(15, 5.30), {"L-proline": 0.113 * _PRO})),
+    "uf_spike": _sol("25 mM acetate, 113 mM proline, 1.17 M sucrose, 6 mg/mL poloxamer 188, pH 5.30",
+                     "Formulation spike",
+                     _mix(_acetate(25, 5.30), {"L-proline": 0.113 * _PRO, "Sucrose": 1.17 * 342.30,
+                                               "Poloxamer 188": 6.0})),
+    "vi_acid": _sol("Low-pH VI acid", "Low-pH viral inactivation (legacy mode)", {}),
+    "vi_base": _sol("Low-pH VI neutralising base", "Low-pH viral inactivation (legacy mode)", {}),
+}
+# solutions made in-line from a stock: (stock, share) per litre delivered
+DILUTIONS = {
+    "naoh_05n": (("naoh_1n", 0.5), ("wfi", 0.5)),
+    "naoh_01n": (("naoh_1n", 0.1), ("wfi", 0.9)),
+    "nacl_05m": (("nacl_2m", 0.25), ("wfi", 0.75)),
+}
+SOLUTION_ALIASES = {
+    "naoh_05n": "0.5 N NaOH (1 N diluted in-line with WFI)",
+    "naoh_01n": "0.1 N NaOH storage (1 N diluted with WFI)",
+    "nacl_05m": "0.5 M NaCl (2 M diluted in-line with WFI)",
+}
+
+
+# ── parameters ────────────────────────────────────────────────────────
 @dataclass
 class N1Params:
     enabled: bool = True
-    V_L: float = 15.0                # N-1 working volume
-    VVD: float = 2.0                 # media in = cell-free permeate out to waste
+    V_L: float = 15.0
+    VVD: float = 2.0
     days: float = 5.0
-    X0: float = 0.5                  # N-1 inoculation VCD
-    mu_h: float = 0.025              # net growth with cells retained
-    X_max: float = 40.0              # density cap
-    transfer_L: float = 15.0         # volume moved into N at inoculation
+    X0: float = 0.5
+    mu_h: float = 0.025
+    X_max: float = 40.0
+    transfer_L: float = 15.0
 
 
 @dataclass
 class UpstreamParams:
     mode: str = "profile"            # "profile" (IDB) or "mechanistic" (legacy ATF model)
-    molecule: str = "purple"         # key in TITRE_PROFILES, or "custom"
-    custom_points: list = field(default_factory=list)   # [[N day, g/L], ...]
-    VVD: float = 1.2                 # N feed = N outflow (cells + broth + product)
-    tff_retentate_frac: float = 0.02 # share of N outflow leaving the TFF as cell concentrate
-    titre_scale: float = 1.0         # what-if multiplier on the curve
-    time_stretch: float = 1.0        # >1 slows the curve down
-    variation_sigma: float = 0.04    # slow random titre drift (log scale)
+    molecule: str = "purple"
+    custom_points: list = field(default_factory=list)
+    VVD: float = 1.2
+    tff_retentate_frac: float = 0.02
+    titre_scale: float = 1.0
+    time_stretch: float = 1.0
+    variation_sigma: float = 0.04
     variation_tau_h: float = 48.0
 
 
 @dataclass
 class BioreactorParams:
-    V_L: float = 83.0                # N working volume (both modes)
-    # --- legacy ATF perfusion model only ---
-    X0: float = 0.5                  # used when N-1 is disabled
+    V_L: float = 83.0
+    X0: float = 0.5
     X_setpoint: float = 50.0
     X_max: float = 90.0
     mu_max_h: float = 0.028
@@ -115,29 +197,36 @@ class BioreactorParams:
 
 @dataclass
 class CaptureParams:
-    mode: str = "batch"              # "batch" (standard Protein A from the sump) or "pcc"
-    column_capacity_g: float = 100.0 # mass the column binds (DBC x CV)
-    DBC_gL: float = 40.0             # -> CV = 2.5 L
-    load_util: float = 0.90          # load target as a share of capacity (margin >= 2x titre noise)
-    load_flow_CVh: float = 15.0      # 4 min residence
-    equil_CV: float = 3.0
-    wash_CV: float = 6.0
-    elute_CV: float = 3.0
-    eluate_CV: float = 2.0           # collected product peak
-    strip_CV: float = 2.0
-    cip_CV: float = 3.0
+    mode: str = "batch"              # "batch" (Case 5 recipe) or "pcc"
+    trains: int = 2                  # columns 1&2 and 3&4: one loads while the other recovers
+    column_capacity_g: float = 100.0 # per train (DBC x CV)
+    DBC_gL: float = 40.0             # -> CV = 2.5 L per train
+    load_util: float = 0.90
+    load_flow_CVh: float = 15.0      # load incl. in-line detergent
+    postload_CV: float = 3.0         # 50 mM Tris pH 7.4
+    wash1_CV: float = 3.0            # arginine / NaCl / Virodex pH 9.0
+    wash2_CV: float = 3.0            # 25 mM acetate pH 6.5
+    elute_CV: float = 3.0            # 25 mM acetate pH 4.45
+    eluate_CV: float = 2.0           # collected peak
+    strip_CV: float = 2.0            # 100 mM acetic acid
+    cip_CV: float = 3.0              # 0.5 N NaOH (1 N diluted in-line)
+    cip_contact_h: float = 0.25
     reequil_CV: float = 5.0
     recovery_flow_CVh: float = 10.0
-    cip_contact_h: float = 0.25
+    startup_wfi_CV: float = 3.0
+    startup_naoh_CV: float = 3.0
+    equil_CV: float = 3.0            # pre-use equilibration
+    storage_wfi_CV: float = 2.0
+    storage_CV: float = 3.0          # 2 % benzyl alcohol
     capture_yield: float = 0.97
     sump_max_L: float = 600.0
-    max_sump_hold_h: float = 96.0    # product stability limit in the sump
-    capture_start_day: float = 0.0   # N day when permeate first goes to the sump
+    max_sump_hold_h: float = 96.0
+    capture_start_day: float = 0.0
     resin_cycles_max: int = 200
 
 
 @dataclass
-class SurgeParams:                   # PCC mode: level-controlled harvest surge
+class SurgeParams:
     V_max_L: float = 40.0
     level_sp: float = 0.4
 
@@ -170,8 +259,13 @@ class PCCParams:
 
 @dataclass
 class VIParams:
-    eluate_surge_max_L: float = 20.0
-    heel_L: float = 0.5
+    mode: str = "detergent"          # "detergent" (Brij-9 before Protein A, Case 5) or "low_ph"
+    det_target_pct: float = 0.5      # Brij-9 in the load (placeholder)
+    det_conc_pct: float = 10.0       # concentrate (stream 8)
+    det_min_contact_min: float = 1.0
+    det_line_hold_min: float = 2.0
+    eluate_surge_max_L: float = 40.0 # Protein A vessel SUM capacity
+    heel_L: float = 0.5              # --- low-pH mode only below ---
     tube_V_L: float = 2.0
     t_hold_min_h: float = 1.0
     eluate_pH_mean: float = 3.9
@@ -186,25 +280,115 @@ class VIParams:
 
 
 @dataclass
-class PolishParams:
-    cex_yield: float = 0.92
-    cex_buffer_L_per_g: float = 0.25
-    cex_pool_gL: float = 10.0
-    aex_yield: float = 0.98
-    aex_buffer_L_per_g: float = 0.05
-    aex_flush_frac: float = 0.05
-    vf_yield: float = 0.99
-    vf_capacity_L: float = 2000.0
-    vf_flush_L: float = 2.0
-    order: str = "aex_cex"           # "aex_cex" (AEX then CEX, as on the site PFD) or "cex_aex" (legacy)
+class DepthParams:                   # new filter each batch; solution order assumed
+    area_m2: float = 0.2
+    capacity_Lm2: float = 150.0
+    flux_LMH: float = 150.0
+    flush_flux_LMH: float = 300.0
+    wfi_flush_Lm2: float = 50.0
+    equil_Lm2: float = 20.0          # 50 mM acetate pH 5.0
+    chase_Lm2: float = 10.0          # same, kept with product
+    salt_Lm2: float = 10.0           # 0.5 M NaCl (2 M in-line)
+    arginine_Lm2: float = 10.0
+    naoh_Lm2: float = 10.0
+    naoh_contact_h: float = 0.25
+    tris_Lm2: float = 10.0
+    trigger_elutions: float = 3.0    # flowsheet: minimum of 3 elution volumes
+    depth_yield: float = 0.98
 
 
 @dataclass
-class SPTFFParams:
+class AEXParams:
+    columns: int = 2
+    CV_L: float = 2.0
+    load_gL: float = 150.0
+    flow_CVh: float = 10.0
+    base_frac: float = 0.04          # 2 M Tris base, L per L load
+    nacl_frac: float = 0.03          # 2 M NaCl, L per L load
+    chase_CV: float = 3.0
+    strip_CV: float = 3.0
+    cip_CV: float = 3.0
+    cip_contact_h: float = 0.5
+    reequil_CV: float = 5.0
+    startup_wfi_CV: float = 3.0
+    startup_naoh_CV: float = 3.0
+    equil_CV: float = 5.0
+    storage_wfi_CV: float = 2.0
+    storage_CV: float = 3.0
+    min_load_frac: float = 0.5
+
+
+@dataclass
+class CEXParams:
+    columns: int = 2
+    CV_L: float = 3.0
+    DBC_gL: float = 50.0
+    flow_CVh: float = 10.0
+    acid_frac: float = 0.03          # 1 M acetic acid, L per L load
+    wash_CV: float = 3.0
+    elute_CV: float = 5.0
+    eluate_CV: float = 3.0
+    strip_CV: float = 3.0
+    cip_CV: float = 3.0
+    cip_contact_h: float = 0.5
+    reequil_CV: float = 5.0
+    startup_wfi_CV: float = 3.0
+    startup_naoh_CV: float = 3.0
+    equil_CV: float = 5.0
+    storage_wfi_CV: float = 2.0
+    storage_CV: float = 3.0
+    min_load_frac: float = 0.5
+
+
+@dataclass
+class PolishParams:
+    order: str = "aex_cex"
+    aex_yield: float = 0.98
+    cex_yield: float = 0.92
+    vf_yield: float = 0.99
+    vf_capacity_L: float = 300.0
+    vf_flush_L: float = 2.0
+
+
+@dataclass
+class VRFParams:
+    flow_Lh: float = 20.0
+    equil_L: float = 2.0
+    chase_L: float = 1.0
+    trigger_elutions: float = 3.0
+
+
+@dataclass
+class SPTFFParams:                   # UF/DF and formulation (name kept for compatibility)
     target_gL: float = 50.0
     DV: float = 7.0
     sptff_yield: float = 0.98
-    excipient_frac: float = 0.05
+    excipient_frac: float = 0.10     # formulation spike, share of final volume
+    uf1_gL: float = 25.0
+    perm_flux_Lh: float = 15.0
+    transfer_Lh: float = 30.0
+    flush_Lh: float = 30.0
+    recover_L: float = 2.0
+    min_V_L: float = 1.0
+    wfi_flush_L: float = 20.0
+    equil_L: float = 5.0
+    cip_L: float = 10.0
+    cip_contact_h: float = 1.0
+    storage_L: float = 10.0
+    min_lot_g: float = 1.0
+
+
+@dataclass
+class BDSParams:
+    mix_h: float = 0.5
+    filter_flush_L: float = 1.0
+    fill_Lh: float = 10.0
+    container_L: float = 2.0
+
+
+@dataclass
+class DSPParams:
+    tail_h: float = 72.0             # downstream run-out after the N run ends
 
 
 @dataclass
@@ -216,17 +400,17 @@ class PATParams:
 
 @dataclass
 class ControlParams:
-    CSPR_pL_cell_day: float = 30.0   # legacy model
-    bleed_kc: float = 0.07           # legacy model, L/h per 1e6 cells/mL
+    CSPR_pL_cell_day: float = 30.0
+    bleed_kc: float = 0.07
     bleed_ti_h: float = 24.0
     bleed_enable_frac: float = 0.95
-    surge_tau_h: float = 4.0         # PCC mode
+    surge_tau_h: float = 4.0
     eluate_tau_h: float = 3.0
     acid_kc: float = 0.05
     acid_ti_h: float = 6.0
     viability_alarm: float = 0.80
     glucose_alarm_gL: float = 0.3
-    titre_drop_alarm: float = 0.15   # NevAI early-warning threshold
+    titre_drop_alarm: float = 0.15
 
 
 def _cast(old, new):
@@ -252,12 +436,18 @@ class ICBParams:
     surge: SurgeParams = field(default_factory=SurgeParams)
     pcc: PCCParams = field(default_factory=PCCParams)
     vi: VIParams = field(default_factory=VIParams)
+    depth: DepthParams = field(default_factory=DepthParams)
+    aex: AEXParams = field(default_factory=AEXParams)
+    cex: CEXParams = field(default_factory=CEXParams)
     polish: PolishParams = field(default_factory=PolishParams)
+    vrf: VRFParams = field(default_factory=VRFParams)
     sptff: SPTFFParams = field(default_factory=SPTFFParams)
+    bds: BDSParams = field(default_factory=BDSParams)
+    dsp: DSPParams = field(default_factory=DSPParams)
     pat: PATParams = field(default_factory=PATParams)
     control: ControlParams = field(default_factory=ControlParams)
-    run_days: float = 14.0           # N days (N-1 days come before)
-    lot_window_h: float = 24.0
+    run_days: float = 14.0
+    lot_window_h: float = 24.0       # UF/DF collects this long per lot
     disturbances: list = field(default_factory=list)
 
     @classmethod
@@ -288,27 +478,33 @@ class ICBParams:
 
 
 # name: (area, route, driver, description)
-# driver: volume = follows the feed rate; mass = follows grams recovered;
-#         event = start-up, filter changes and upsets
 WASTE_STREAMS = {
     "n1_permeate":         ("USP", "direct",         "volume", "N-1 permeate: spent media removed to intensify the seed"),
     "tff_retentate":       ("USP", "bio-kill",       "volume", "TFF cell concentrate from the N outflow"),
     "cell_bleed":          ("USP", "bio-kill",       "volume", "Cell bleed (legacy ATF model)"),
     "atf_flush":           ("USP", "bio-kill",       "event",  "ATF filter swap flush (legacy ATF model)"),
-    "ramp_harvest":        ("USP", "direct",         "volume", "Permeate sent to drain before capture starts"),
-    "sump_overflow":       ("USP", "direct",         "event",  "Harvest sump overflow (cell-free)"),
-    "capture_flowthrough": ("DSP", "direct",         "volume", "Protein A load flow-through: spent permeate, high organic load"),
-    "capture_buffers":     ("DSP", "direct",         "mass",   "Protein A equilibration, wash, re-equilibration, elution pre/post-peak"),
-    "capture_strip_cip":   ("DSP", "neutralisation", "mass",   "Protein A acid strip and caustic CIP"),
-    "vi_flush":            ("DSP", "neutralisation", "event",  "VI tube start-up buffer"),
-    "vi_divert":           ("DSP", "neutralisation", "event",  "Out-of-spec VI material diverted"),
-    "cex_flowthrough":     ("DSP", "direct",         "mass",   "CEX load flow-through (AEX pool; VI pool in legacy order)"),
-    "cex_buffers":         ("DSP", "neutralisation", "mass",   "CEX buffers incl. strip and CIP"),
-    "aex_buffers":         ("DSP", "direct",         "mass",   "AEX membrane equilibration and flush"),
-    "vf_flush":            ("DSP", "direct",         "mass",   "Virus filter pre-use flush"),
-    "sptff_permeate":      ("DSP", "direct",         "mass",   "SPTFF permeate incl. inline DF buffer"),
+    "ramp_harvest":        ("USP", "direct",         "volume", "Permeate to drain before capture starts (stream 2)"),
+    "sump_overflow":       ("USP", "direct",         "event",  "Surge tank overflow (cell-free)"),
+    "capture_flowthrough": ("DSP", "direct",         "volume", "Protein A load flow-through with Brij-9: high organic load"),
+    "capture_buffers":     ("DSP", "direct",         "mass",   "Protein A post-load wash, washes 1-2, elution pre/post-peak, re-equilibration"),
+    "capture_strip_cip":   ("DSP", "neutralisation", "mass",   "Protein A acetic acid strip and 0.5 N NaOH CIP"),
+    "unit_flushes":        ("DSP", "direct",         "event",  "Pre-use and end-of-campaign WFI flushes and equilibration of columns"),
+    "sanitisation":        ("DSP", "neutralisation", "event",  "Pre-use caustic sanitisation of columns"),
+    "vi_flush":            ("DSP", "neutralisation", "event",  "Low-pH VI tube start-up buffer (low-pH mode)"),
+    "vi_divert":           ("DSP", "neutralisation", "event",  "Out-of-spec VI material diverted (low-pH mode)"),
+    "depth_flush":         ("DSP", "direct",         "mass",   "Depth filter WFI flush and equilibration (new filter per batch)"),
+    "depth_post":          ("DSP", "neutralisation", "mass",   "Depth filtration salt, arginine, caustic and Tris flushes (order assumed)"),
+    "aex_buffers":         ("DSP", "direct",         "mass",   "AEX strip and re-equilibration"),
+    "aex_cip":             ("DSP", "neutralisation", "mass",   "AEX 1 N NaOH CIP"),
+    "cex_flowthrough":     ("DSP", "direct",         "mass",   "CEX load flow-through (acidified load)"),
+    "cex_buffers":         ("DSP", "direct",         "mass",   "CEX wash, elution pre/post-peak, strip and re-equilibration"),
+    "cex_cip":             ("DSP", "neutralisation", "mass",   "CEX 1 N NaOH CIP"),
+    "vf_flush":            ("DSP", "direct",         "mass",   "Virus filter WFI flush and equilibration (new filter)"),
+    "sptff_permeate":      ("DSP", "direct",         "mass",   "UF/DF permeate incl. diafiltration buffer"),
+    "ufdf_cip":            ("DSP", "neutralisation", "mass",   "UF/DF membrane flushes, equilibration and 1 N NaOH CIP"),
+    "bds_flush":           ("DSP", "direct",         "mass",   "0.2 um fill filter WFI flush"),
 }
-BUFFER_OPS = ("capture", "vi", "cex", "aex", "vf", "sptff")
+BUFFER_OPS = ("capture", "vi", "depth", "adjust", "aex", "cex", "vf", "sptff", "bds")
 
 
 def _r(x, n=3):
@@ -335,7 +531,6 @@ def profile_label(p):
 
 
 def titre_at(p, n_day, pts=None):
-    """Permeate titre (g/L) at N day n_day: linear interpolation, held after the last point."""
     pts = pts or profile_points(p)
     up = p.upstream
     t = n_day / max(up.time_stretch, 1e-6)
@@ -352,8 +547,16 @@ def titre_at(p, n_day, pts=None):
 
 
 # ── unit summaries ────────────────────────────────────────────────────
+def det_frac(p):
+    """Litres of Brij-9 concentrate per litre of permeate loaded (0 in low-pH mode)."""
+    vi = p.vi
+    if vi.mode == "low_ph" or vi.det_target_pct <= 0:
+        return 0.0
+    c = max(vi.det_conc_pct, vi.det_target_pct + 1e-6)
+    return vi.det_target_pct / (c - vi.det_target_pct)
+
+
 def capture_cycle(p):
-    """Per-cycle volumes and times for the selected capture mode."""
     if p.capture.mode == "pcc":
         pc = p.pcc
         cv = pc.CV_L
@@ -364,10 +567,10 @@ def capture_cycle(p):
                 "eluate_L": pc.eluate_CV * cv, "strip_cip_L": strip_cip,
                 "other_buffer_waste_L": buf - pc.eluate_CV * cv - strip_cip,
                 "load_flow_Lh": pc.load_flow_max_Lh, "recovery_h": pc.recovery_time_h(),
-                "yield": pc.capture_yield, "resin_cycles_max": pc.resin_cycles_max}
+                "yield": pc.capture_yield, "resin_cycles_max": pc.resin_cycles_max, "trains": 1}
     cp = p.capture
     cv = cp.column_capacity_g / max(cp.DBC_gL, 1e-9)
-    cvs = cp.equil_CV + cp.wash_CV + cp.elute_CV + cp.strip_CV + cp.cip_CV + cp.reequil_CV
+    cvs = cp.postload_CV + cp.wash1_CV + cp.wash2_CV + cp.elute_CV + cp.strip_CV + cp.cip_CV + cp.reequil_CV
     buf = cvs * cv
     strip_cip = (cp.strip_CV + cp.cip_CV) * cv
     return {"mode": "batch", "CV_L": cv, "target_g": cp.column_capacity_g * cp.load_util,
@@ -376,14 +579,15 @@ def capture_cycle(p):
             "other_buffer_waste_L": buf - cp.eluate_CV * cv - strip_cip,
             "load_flow_Lh": max(cp.load_flow_CVh * cv, 1e-6),
             "recovery_h": cvs / max(cp.recovery_flow_CVh, 1e-9) + cp.cip_contact_h,
-            "yield": cp.capture_yield, "resin_cycles_max": cp.resin_cycles_max}
+            "yield": cp.capture_yield, "resin_cycles_max": cp.resin_cycles_max,
+            "trains": max(1, int(cp.trains))}
 
 
 def train_yield(p, cyc=None):
     cyc = cyc or capture_cycle(p)
-    vi, po, sp = p.vi, p.polish, p.sptff
-    return (cyc["yield"] * vi.vi_yield * po.cex_yield * po.aex_yield
-            * po.vf_yield * sp.sptff_yield)
+    po = p.polish
+    y = cyc["yield"] * p.depth.depth_yield * po.aex_yield * po.cex_yield * po.vf_yield * p.sptff.sptff_yield
+    return y * (p.vi.vi_yield if p.vi.mode == "low_ph" else 1.0)
 
 
 def n1_summary(p):
@@ -399,37 +603,63 @@ def n1_summary(p):
             "media_L": round(media, 1), "waste_L": round(media, 1)}
 
 
-def buffer_L_per_g(p):
-    """Buffer litres per gram of product entering capture: the IDB planning constants."""
-    vi, po, sp = p.vi, p.polish, p.sptff
+def _nominal_lot_g(p):
+    """Grams entering capture per lot window, averaged over the run (planning only)."""
+    up, br = p.upstream, p.bioreactor
+    if up.mode == "mechanistic":
+        return 500.0
+    Fp = up.VVD * br.V_L / 24.0 * (1 - up.tff_retentate_frac)
+    pts = profile_points(p)
+    n = max(1, int(p.run_days * 24))
+    g = sum(Fp * titre_at(p, k / 24.0, pts) for k in range(n))
+    return max(g / n * p.lot_window_h, 1.0)
+
+
+def buffer_L_per_g(p, lot_g=None):
+    """Planning litres of solution (incl. WFI) per gram loaded on Protein A, by unit.
+    Brij-9 follows the load volume, so it is returned separately per litre of load."""
+    vi, dp, ae, ce, vr, po, sp, bd = p.vi, p.depth, p.aex, p.cex, p.vrf, p.polish, p.sptff, p.bds
     cyc = capture_cycle(p)
     tg = max(cyc["target_g"], 1e-9)
-    elu = cyc["eluate_L"] / tg                       # eluate L per g loaded
-    g1 = cyc["yield"] * vi.vi_yield                  # g after capture + VI
-    if po.order != "cex_aex":                        # AEX flow-through, then CEX bind/elute
-        aex = g1 * po.aex_buffer_L_per_g
-        g2 = g1 * po.aex_yield
-        cex = g2 * po.cex_buffer_L_per_g
-        g3 = g2 * po.cex_yield
-        v3 = g3 / po.cex_pool_gL                     # CEX pool feeds the virus filter
-    else:                                            # legacy: CEX, then AEX
-        cex = g1 * po.cex_buffer_L_per_g
-        g2 = g1 * po.cex_yield
-        aex = g2 * po.aex_buffer_L_per_g
-        g3 = g2 * po.aex_yield
-        v3 = g2 / po.cex_pool_gL * (1 + po.aex_flush_frac)
-    g_ds = g3 * po.vf_yield * sp.sptff_yield
-    v_ret = g_ds / sp.target_gL
-    d = {
-        "capture": cyc["buffer_L"] / tg,
-        "vi": elu * vi.acid_bias + elu * (1 + vi.acid_bias) * vi.base_frac,
-        "cex": cex,
-        "aex": aex,
-        "vf": v3 * po.vf_flush_L / max(po.vf_capacity_L, 1e-9),
-        "sptff": v_ret * (sp.DV + sp.excipient_frac),
-    }
-    d["total"] = sum(d.values())
+    d = dict.fromkeys(BUFFER_OPS, 0.0)
+    d["capture"] = cyc["buffer_L"] / tg
+    g = cyc["yield"]
+    v = cyc["eluate_L"] / tg
+    if vi.mode == "low_ph":
+        d["vi"] = v * vi.acid_bias + v * (1 + vi.acid_bias) * vi.base_frac
+        v *= (1 + vi.acid_bias) * (1 + vi.base_frac)
+        g *= vi.vi_yield
+    batch = max(dp.trigger_elutions, 1.0) * tg
+    A = dp.area_m2
+    d["depth"] = A * (dp.wfi_flush_Lm2 + dp.equil_Lm2 + dp.chase_Lm2 + dp.salt_Lm2
+                      + dp.arginine_Lm2 + dp.naoh_Lm2 + dp.tris_Lm2) / batch
+    v += A * dp.chase_Lm2 / batch
+    g *= dp.depth_yield
+    for unit in (("cex", "aex") if po.order == "cex_aex" else ("aex", "cex")):
+        if unit == "aex":
+            cyc_g = max(min(ae.CV_L * ae.load_gL, batch * g), 1e-9)
+            d["aex"] += ae.CV_L * (ae.chase_CV + ae.strip_CV + ae.cip_CV + ae.reequil_CV) * g / cyc_g
+            d["adjust"] += v * (ae.base_frac + ae.nacl_frac)
+            v = v * (1 + ae.base_frac + ae.nacl_frac) + ae.CV_L * ae.chase_CV * g / cyc_g
+            g *= po.aex_yield
+        else:
+            cyc_g = max(min(ce.CV_L * ce.DBC_gL, batch * g), 1e-9)
+            d["cex"] += ce.CV_L * (ce.wash_CV + ce.elute_CV + ce.strip_CV + ce.cip_CV + ce.reequil_CV) * g / cyc_g
+            d["adjust"] += v * ce.acid_frac
+            v = ce.CV_L * ce.eluate_CV * g / cyc_g
+            g *= po.cex_yield
+    vrf_batch = max(vr.trigger_elutions, 1.0) * ce.CV_L * ce.eluate_CV
+    d["vf"] = (v * (po.vf_flush_L + vr.equil_L) / max(po.vf_capacity_L, 1e-9)
+               + v * vr.chase_L / max(vrf_batch, 1e-9))
+    g *= po.vf_yield
+    lot = max(lot_g if lot_g else _nominal_lot_g(p), 1e-9)
+    g_ds = g * sp.sptff_yield
+    d["sptff"] = (g * sp.DV / max(sp.uf1_gL, 1e-9) + g_ds * sp.excipient_frac / max(sp.target_gL, 1e-9)
+                  + (2 * sp.wfi_flush_L + sp.equil_L + sp.cip_L + sp.storage_L + sp.recover_L) / lot)
+    d["bds"] = bd.filter_flush_L / lot
+    d["total"] = sum(d[k] for k in BUFFER_OPS)
     d["ds_g_per_g"] = g_ds
+    d["detergent_L_per_L_load"] = det_frac(p)
     return d
 
 
@@ -438,9 +668,9 @@ def steady_state_design(p):
     """Legacy ATF perfusion model: algebraic steady state at the VCD setpoint."""
     br, vi, ct = p.bioreactor, p.vi, p.control
     cyc = capture_cycle(p)
+    dose = det_frac(p)
     V, X = br.V_L, br.X_setpoint
     notes = ["Legacy ATF perfusion model (cells returned to the reactor): fully continuous ICB, not IDB."]
-
     Fin = ct.CSPR_pL_cell_day * X * V * 1e-3 / 24.0
     Fin = min(max(Fin, br.VVD_min * V / 24.0), br.VVD_max * V / 24.0)
     S = br.S_feed_gL - br.qS_pg_cell_h * X * 1e-3 * V / Fin
@@ -460,7 +690,6 @@ def steady_state_design(p):
     P = br.qP_pg_cell_h * X * 1e-3 * V / max(Fh * br.sieving0 + Fb, 1e-9)
     titre = P * br.sieving0
     harvest_g_h = Fh * titre
-
     target = cyc["target_g"]
     t_fill = target / harvest_g_h if harvest_g_h > 0 else math.inf
     if cyc["mode"] == "pcc":
@@ -470,21 +699,22 @@ def steady_state_design(p):
         elif cyc["recovery_h"] > (pc.n_columns - 2) * t_fill:
             notes.append(f"PCC recovery ({cyc['recovery_h']:.1f} h) exceeds the time available "
                          f"({(pc.n_columns - 2) * t_fill:.1f} h); loading will stall.")
-        res_min = pc.CV_L / Fh * 60.0 if Fh > 0 else math.inf
-        if res_min < pc.min_residence_min:
+        if (pc.CV_L / Fh * 60.0 if Fh > 0 else math.inf) < pc.min_residence_min:
             notes.append("Load residence time per column is below the minimum; use larger columns.")
         if pc.load_factor > pc.sat_factor:
             notes.append("load_factor above sat_factor: product will be lost in breakthrough.")
     else:
-        load_h = target / titre / cyc["load_flow_Lh"] if titre > 0 else math.inf
-        if load_h + cyc["recovery_h"] > t_fill:
-            notes.append(f"Batch capture cycle ({load_h + cyc['recovery_h']:.1f} h) is longer than the "
-                         f"time to collect one load ({t_fill:.1f} h); the sump will keep growing.")
-
-    eluate_Lh = cyc["eluate_L"] / t_fill if math.isfinite(t_fill) and t_fill > 0 else 0.0
-    vi_res = vi.tube_V_L / (eluate_Lh * (1 + vi.acid_bias)) if eluate_Lh > 0 else math.inf
-    if vi_res < vi.t_hold_min_h:
-        notes.append("VI tube too small for the eluate flow; hold time below minimum.")
+        load_h = target / titre * (1 + dose) / cyc["load_flow_Lh"] if titre > 0 else math.inf
+        lim = max(load_h, (load_h + cyc["recovery_h"]) / cyc["trains"])
+        if lim > t_fill:
+            notes.append(f"Protein A needs {lim:.1f} h per load across {cyc['trains']} train(s) but a load "
+                         f"arrives every {t_fill:.1f} h; the sump will keep growing.")
+    vi_res = None
+    if vi.mode == "low_ph":
+        eluate_Lh = cyc["eluate_L"] / t_fill if math.isfinite(t_fill) and t_fill > 0 else 0.0
+        vi_res = vi.tube_V_L / (eluate_Lh * (1 + vi.acid_bias)) if eluate_Lh > 0 else math.inf
+        if vi_res < vi.t_hold_min_h:
+            notes.append("VI tube too small for the eluate flow; hold time below minimum.")
     if len(notes) == 1:
         notes.append("Design is consistent at steady state.")
     ds_g_h = harvest_g_h * train_yield(p, cyc)
@@ -499,16 +729,17 @@ def steady_state_design(p):
         "capture_fill_h": _r(t_fill, 2), "capture_recovery_h": _r(cyc["recovery_h"], 2),
         "capture_cycles_per_day": _r(24 / t_fill, 2) if math.isfinite(t_fill) else 0,
         "eluate_conc_gL": _r(target * cyc["yield"] / cyc["eluate_L"], 1),
-        "vi_residence_h": _r(vi_res, 2), "ds_kg_day": _r(ds_g_h * 24 / 1000),
-        "notes": notes,
+        "vi_residence_h": _r(vi_res, 2) if vi_res is not None else None,
+        "ds_kg_day": _r(ds_g_h * 24 / 1000), "notes": notes,
     }
 
 
 def profile_design(p):
-    """IDB planning view from the titre curve (noise-free): daily grams, cycles and buffer."""
-    up, br, cp = p.upstream, p.bioreactor, p.capture
+    """IDB planning view from the titre curve (noise-free): daily grams, cycles and solutions."""
+    up, br, cp, vi, dp = p.upstream, p.bioreactor, p.capture, p.vi, p.depth
     cyc = capture_cycle(p)
     per_g = buffer_L_per_g(p)
+    dose = det_frac(p)
     pts = profile_points(p)
     target = cyc["target_g"]
     F = up.VVD * br.V_L / 24.0
@@ -520,7 +751,7 @@ def profile_design(p):
     sump_g = sump_L = 0.0
     first = None
     for d in range(int(math.ceil(p.run_days))):
-        g_d = 0.0
+        g_d = L_d = 0.0
         for k in range(24):
             t = d + k / 24.0
             if t >= p.run_days:
@@ -529,33 +760,36 @@ def profile_design(p):
                 continue
             g = Fp * titre_at(p, t + 0.5 / 24.0, pts)
             g_d += g
+            L_d += Fp
             if first is None:
                 sump_g += g
                 sump_L += Fp
                 if sump_g >= target:
                     first = {"n_day": round(t + 1.0 / 24.0, 2), "sump_L": round(sump_L, 1)}
         total_g += g_d
+        det_L = L_d * dose
         daily.append({"n_day": d + 1, "titre_gL": round(titre_at(p, d + 0.5, pts), 3),
                       "g": round(g_d, 1), "cycles": round(g_d / target, 2),
                       "capture_buffer_L": round(g_d * per_g["capture"], 1),
-                      "buffer_L": round(g_d * per_g["total"], 1)})
+                      "detergent_L": round(det_L, 1),
+                      "buffer_L": round(g_d * per_g["total"] + det_L, 1)})
 
     pk = max(daily, key=lambda r: r["g"]) if daily else {"g": 0.0, "n_day": None}
     peak_g = pk["g"]
     C_pk = peak_g / (Fp * 24.0) if Fp > 0 else 0.0
     if cyc["mode"] == "batch":
         net_g = target
-        load_h = (target / C_pk) / cyc["load_flow_Lh"] if C_pk > 0 else math.inf
+        load_h = (target / C_pk) * (1 + dose) / cyc["load_flow_Lh"] if C_pk > 0 else math.inf
         cycle_h = load_h + cyc["recovery_h"]
+        lim_h = max(load_h, cycle_h / cyc["trains"])
         if 1.0 - cp.load_util < 2.0 * p.pat.titre_noise - 1e-9:
             notes.append(f"Load margin ({100 * (1 - cp.load_util):.0f} %) is less than twice the titre "
-                         f"measurement noise ({100 * p.pat.titre_noise:.0f} %); expect occasional column "
-                         "overloads. Lower load_util or improve the titre measurement.")
+                         f"measurement noise ({100 * p.pat.titre_noise:.0f} %); expect occasional overloads.")
     else:
         pc = p.pcc
-        # mass carried over on column 2 is eluted in the next cycle, not this one
         net_g = target - pc.bt_frac * max(0.0, target - pc.DBC_gL * pc.CV_L)
         cycle_h = cyc["recovery_h"] / max(pc.n_columns - 2, 1)
+        lim_h = cycle_h
         if pc.n_columns < 3:
             notes.append("PCC needs at least 3 columns for uninterrupted loading.")
         if pc.load_factor > pc.sat_factor:
@@ -563,15 +797,13 @@ def profile_design(p):
         if Fp > cyc["load_flow_Lh"]:
             notes.append("Permeate flow exceeds the PCC load pump limit.")
     peak_cycles = peak_g / max(net_g, 1e-9)
-    max_cyc = 24.0 / cycle_h if cycle_h > 0 and math.isfinite(cycle_h) else 0.0
+    max_cyc = 24.0 / lim_h if lim_h > 0 and math.isfinite(lim_h) else 0.0
     if peak_cycles > max_cyc:
-        notes.append(f"On N day {pk['n_day']} the column needs {peak_cycles:.1f} cycles but can run "
-                     f"about {max_cyc:.1f} a day; the sump will grow. Use a larger or second column.")
+        notes.append(f"On N day {pk['n_day']} Protein A needs {peak_cycles:.1f} cycles but can run about "
+                     f"{max_cyc:.1f} a day; the sump will grow. Use larger columns or another train.")
     elif max_cyc > 0 and peak_cycles > 0.9 * max_cyc:
-        notes.append(f"On N day {pk['n_day']} the column runs at {100 * peak_cycles / max_cyc:.0f} % of its "
-                     f"cycle limit ({peak_cycles:.1f} of {max_cyc:.1f} a day); titre swings will cause "
-                     "waits and sump build-up. Allow at least 10 % spare.")
-
+        notes.append(f"On N day {pk['n_day']} Protein A runs at {100 * peak_cycles / max_cyc:.0f} % of its "
+                     f"cycle limit ({peak_cycles:.1f} of {max_cyc:.1f} a day). Allow at least 10 % spare.")
     sump_max = cp.sump_max_L if cyc["mode"] == "batch" else p.surge.V_max_L
     if first is None:
         notes.append("The sump never collects one column load in this run; use a smaller column or a longer run.")
@@ -582,16 +814,28 @@ def profile_design(p):
                          f"more than its {sump_max:.0f} L capacity.")
         if hold_h > cp.max_sump_hold_h:
             notes.append(f"The first product waits about {hold_h:.0f} h in the sump (limit "
-                         f"{cp.max_sump_hold_h:.0f} h); check product stability or load a partial first cycle.")
+                         f"{cp.max_sump_hold_h:.0f} h); check stability or load a partial first cycle.")
     last_day = pts[-1][0] * up.time_stretch
     if p.run_days > last_day + 0.5:
         notes.append(f"Run is longer than the titre curve ({last_day:.1f} days); titre is held at "
                      f"{pts[-1][1] * up.titre_scale:.2f} g/L after that.")
-
-    first_buf = None
-    if first and daily:
-        first_buf = daily[min(int(first["n_day"]), len(daily) - 1)]["buffer_L"]
+    if vi.mode != "low_ph":
+        res_min = cyc["CV_L"] / max(cyc["load_flow_Lh"], 1e-9) * 60.0
+        if vi.det_line_hold_min + res_min < vi.det_min_contact_min:
+            notes.append(f"Brij-9 contact before and on the column ({vi.det_line_hold_min + res_min:.1f} min) is "
+                         f"shorter than the {vi.det_min_contact_min:.0f} min required; add a hold loop.")
+    pav_need = max(dp.trigger_elutions, 1.0) * cyc["eluate_L"]
+    if pav_need > vi.eluate_surge_max_L:
+        notes.append(f"The Protein A vessel must hold {pav_need:.0f} L ({dp.trigger_elutions:g} eluates) before "
+                     f"depth filtration starts, more than its {vi.eluate_surge_max_L:.0f} L.")
+    if pav_need / max(dp.area_m2, 1e-9) > dp.capacity_Lm2:
+        notes.append(f"Depth filter loading {pav_need / max(dp.area_m2, 1e-9):.0f} L/m² exceeds its "
+                     f"{dp.capacity_Lm2:.0f} L/m² capacity; use a larger filter.")
+    first_buf = daily[min(int(first["n_day"]), len(daily) - 1)]["buffer_L"] if first and daily else None
     peak_buf = max((r["buffer_L"] for r in daily), default=0.0)
+    info = ("Downstream runs the Case 5 flowsheet step by step (Brij-9, Protein A, depth filtration, AEX, CEX, "
+            "virus filtration, UF/DF, BDS fill). Step volumes are typical placeholders and the depth-filtration "
+            "solution order is assumed: replace them with the process description.")
     return {
         "mode": "profile", "molecule": up.molecule, "molecule_label": profile_label(p),
         "feed_L_day": _r(F * 24, 1), "permeate_L_day": _r(Fp * 24, 1),
@@ -608,7 +852,7 @@ def profile_design(p):
         "total_g_harvested": _r(total_g, 1),
         "ds_kg_est": _r(total_g * train_yield(p, cyc) / 1000),
         "daily": daily,
-        "notes": notes or ["Design is consistent with the titre curve."],
+        "notes": [info] + (notes or ["Design is consistent with the titre curve."]),
     }
 
 
@@ -619,7 +863,6 @@ def process_design(p):
 
 
 def portfolio_sizing(p):
-    """Run the planning view for every molecule and name the sizing cases."""
     names = list(TITRE_PROFILES) + (["custom"] if p.upstream.custom_points else [])
     rows = []
     for name in names:
@@ -641,13 +884,12 @@ def portfolio_sizing(p):
         r["pct_of_buffer_sizing"] = round(100 * (r["peak_buffer_L_day"] or 0.0) / top) if top > 0 else None
     sump_rows = [r for r in rows if r["first_cycle_sump_L"] is not None]
     sump_case = max(sump_rows, key=lambda r: r["first_cycle_sump_L"]) if sump_rows else None
-    notes = [f"Size buffer supply and column cycling for the {buf_case['label'].lower()}: "
-             f"{buf_case['peak_buffer_L_day']} L/day at {buf_case['peak_cycles_day']} cycles/day. "
-             "The other molecules run inside that envelope; only their timing differs."]
+    notes = [f"Size solution supply and column cycling for the {buf_case['label'].lower()}: "
+             f"{buf_case['peak_buffer_L_day']} L/day at {buf_case['peak_cycles_day']} cycles/day."]
     if sump_case:
         notes.append(f"Size the harvest sump for the {sump_case['label'].lower()}: "
                      f"{sump_case['first_cycle_sump_L']} L before its first cycle (N day "
-                     f"{sump_case['first_cycle_n_day']}). Slow starters set sump size and hold time.")
+                     f"{sump_case['first_cycle_n_day']}).")
     missing = [r["label"] for r in rows if r["first_cycle_sump_L"] is None]
     if missing:
         notes.append("Never collects one column load in this run: " + ", ".join(missing) + ".")
