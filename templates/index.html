@@ -7,6 +7,7 @@
 <script src="/static/chart.umd.js"></script>  <!-- Chart.js 4.4.1 (MIT), bundled so no CDN is needed -->
 <script src="/static/pfd.js"></script>        <!-- live process flow diagram -->
 <script src="/static/pfdvideo.js"></script>   <!-- dynamic start-up film (MP4 / WebM) -->
+<script src="/static/seqfilm.js"></script>    <!-- step-sequence film (MP4 / WebM) -->
 <style>
 :root{--bg:#f4f6f9;--card:#fff;--bd:#e3e7ee;--t1:#16202c;--t2:#5b6675;--ac:#0e7c7b;--er:#b42318}
 *{box-sizing:border-box}
@@ -50,7 +51,6 @@ td,th{padding:4px 6px;border-bottom:1px solid var(--bd);text-align:left;vertical
 .err{color:var(--er);font-weight:600}
 .note{margin:3px 0}
 .fcnote{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;border-radius:8px;padding:6px 8px;font-size:11.5px;margin-bottom:6px}
-/* process flow diagram */
 .pfdbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
 .pfdbar input[type=range]{flex:1;min-width:180px;accent-color:var(--ac)}
 #pfdBox{overflow-x:auto;border:1px solid var(--bd);border-radius:8px;background:#fff}
@@ -60,13 +60,12 @@ td,th{padding:4px 6px;border-bottom:1px solid var(--bd);text-align:left;vertical
 #pfdTable td:nth-child(n+3),#pfdTable th:nth-child(n+3){text-align:right;white-space:nowrap}
 #pfdTable tr.on td{background:#e6f5f3}
 #pfdTable thead th{position:sticky;top:0;background:#fff}
-/* video export */
-#vidCanvas{display:block;width:100%;height:auto;aspect-ratio:16/9;border-radius:12px;background:#e9edf3;margin-top:4px}
-#vidOut video{display:block;width:100%;max-height:440px;margin-top:10px;border-radius:12px;background:#000}
+#vidCanvas,#seqCanvas{display:block;width:100%;height:auto;aspect-ratio:16/9;border-radius:12px;background:#e9edf3;margin-top:4px}
+#vidOut video,#seqOut video{display:block;width:100%;max-height:440px;margin-top:10px;border-radius:12px;background:#000}
 .vidlinks{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px}
 .btnlink{display:inline-block;background:var(--ac);color:#fff;border-radius:8px;padding:8px 14px;font-weight:600;text-decoration:none}
-#vidInfo{display:block;margin:2px 0 6px}
-/* print report (hidden on screen) */
+#vidInfo,#seqInfo{display:block;margin:2px 0 6px}
+.num{text-align:right;white-space:nowrap}
 .print-only{display:none}
 #printHead h2{font-size:18px;margin:0 0 2px}
 .ptab{columns:3;column-gap:18px}
@@ -107,8 +106,10 @@ td,th{padding:4px 6px;border-bottom:1px solid var(--bd);text-align:left;vertical
       <form method="post" action="/logout"><button type="submit" class="ghost">Log out</button></form>
     </div>
   </div>
-  <p>N-1 perfusion seed → N reactor (feed in = cells + broth + product out) → TFF cell removal → surge tank → Protein A → low-pH VI → depth filtration → AEX → CEX → virus filter → UF/DF (SPTFF) → BDS.
-     Buffer and wastewater follow the grams recovered each day, driven by the molecule's permeate titre curve. Day axis = campaign day (N-1 first, then N).</p>
+  <p>N-1 perfusion seed → N reactor → TFF cell removal → surge tank → Brij-9 in-line → Protein A (columns 1&amp;2, 3&amp;4)
+     → depth filtration → Tris base/NaCl in-line → AEX → acetic acid in-line → CEX → virus filtration → UF/DF
+     → BDS hold → 0.2 µm → cryovault. Every step of every unit runs in sequence; solutions are tracked by name.
+     Day axis = campaign day (N-1 first, then N, then the downstream run-out).</p>
   <div id="printHead" class="print-only"></div>
 </header>
 <main>
@@ -119,8 +120,8 @@ td,th{padding:4px 6px;border-bottom:1px solid var(--bd);text-align:left;vertical
       <option value="profile">IDB: titre curve</option>
       <option value="mechanistic">Legacy ATF perfusion model</option></select></label>
     <label>Capture <select id="capMode">
-      <option value="batch">Standard (batch) Protein A</option>
-      <option value="pcc">3-column PCC</option></select></label>
+      <option value="batch">Case 5 Protein A (2 trains, all steps)</option>
+      <option value="pcc">3-column PCC (lumped steps)</option></select></label>
     <label><input type="checkbox" id="useFc" checked> NevAI forecasts</label>
     <label>Seed <input id="seed" type="number" value="1"></label>
     <button id="trainBtn" class="ghost">Train NevAI</button>
@@ -144,7 +145,7 @@ td,th{padding:4px 6px;border-bottom:1px solid var(--bd);text-align:left;vertical
   <div id="kpis" class="kpis"></div>
 
   <div class="card" id="pfdCard">
-    <h3>Process flow diagram — live playback of the last run</h3>
+    <h3>Process flow diagram — live playback of the last run (every step shown on its unit)</h3>
     <div class="pfdbar">
       <button id="pfdPlay" type="button">▶ Play</button>
       <input id="pfdSlider" type="range" min="0" max="0" value="0" step="1" aria-label="Simulation hour">
@@ -164,7 +165,7 @@ td,th{padding:4px 6px;border-bottom:1px solid var(--bd);text-align:left;vertical
   </div>
 
   <div class="card no-print" id="vidCard">
-    <h3>Video export — dynamic start-up film of the last run</h3>
+    <h3>Video export — dynamic start-up film with the steps running now</h3>
     <div class="pfdbar">
       <label>Start <select id="vidStart">
         <option value="0" selected>Campaign start (N-1 seed)</option>
@@ -190,7 +191,34 @@ td,th{padding:4px 6px;border-bottom:1px solid var(--bd);text-align:left;vertical
     <span id="vidInfo" class="muted">Run a simulation first.</span>
     <canvas id="vidCanvas" width="1920" height="1080"></canvas>
     <div id="vidOut"></div>
-    <div class="muted" style="margin-top:6px">Recording runs in real time: keep this tab visible until it finishes. Safari and recent Chrome/Edge save MP4 (plays on iPhone, Keynote, PowerPoint); Firefox saves WebM.</div>
+    <div class="muted" style="margin-top:6px">Recording runs in real time: keep this tab visible until it finishes. Safari and recent Chrome/Edge save MP4; Firefox saves WebM.</div>
+  </div>
+
+  <div class="card no-print" id="seqCard">
+    <h3>Step sequence film — every step of every unit, in order, coloured by solution</h3>
+    <div class="pfdbar">
+      <button id="seqPlay" type="button">▶ Play</button>
+      <input id="seqSlider" type="range" min="0" max="0" value="0" step="0.25" aria-label="Campaign hour">
+      <label>Speed <select id="seqSpeed">
+        <option value="0.25">15 min/s</option><option value="0.5" selected>30 min/s</option><option value="1">1 h/s</option>
+        <option value="3">3 h/s</option><option value="6">6 h/s</option><option value="24">1 day/s</option></select></label>
+      <label>Window <select id="seqWin">
+        <option value="3">3 h</option><option value="6">6 h</option><option value="12" selected>12 h</option>
+        <option value="24">1 day</option><option value="72">3 days</option></select></label>
+      <label>Jump to <select id="seqJump"><option value="">—</option>
+        <option value="pa">First Protein A load</option><option value="depth">First depth filtration</option>
+        <option value="aex">First AEX load</option><option value="cex">First CEX load</option>
+        <option value="vrf">First virus filtration</option><option value="ufdf">First UF/DF lot</option>
+        <option value="bds">First fill</option><option value="end">Campaign end (storage)</option></select></label>
+      <label>Record <select id="seqLen"><option value="6">6 h</option><option value="24" selected>1 day</option>
+        <option value="72">3 days</option><option value="all">to the end</option></select></label>
+      <button id="seqRecord" type="button">● Record video</button>
+      <button id="seqStopRec" type="button" class="ghost" disabled>Stop</button>
+      <label><input type="checkbox" id="seqFollow"> Follow diagram slider</label>
+    </div>
+    <span id="seqInfo" class="muted">Run a simulation first.</span>
+    <canvas id="seqCanvas" width="1920" height="1080"></canvas>
+    <div id="seqOut"></div>
   </div>
 
   <div id="notes" class="card"></div>
@@ -198,14 +226,22 @@ td,th{padding:4px 6px;border-bottom:1px solid var(--bd);text-align:left;vertical
   <div class="grid">
     <div class="card"><h3>Permeate titre and NevAI 24 h forecast</h3><div class="chart"><canvas id="cTitre"></canvas></div></div>
     <div class="card"><h3>Product harvested and Protein A cycles per day</h3><div class="chart"><canvas id="cGrams"></canvas></div></div>
-    <div class="card"><h3>Buffer per day by unit operation</h3><div class="chart"><canvas id="cBuffer"></canvas></div></div>
-    <div class="card"><h3>Buffer next 24 h: NevAI forecast vs actual</h3><div class="chart"><canvas id="cBufFc"></canvas></div></div>
+    <div class="card"><h3>Solutions per day by unit (incl. WFI)</h3><div class="chart"><canvas id="cBuffer"></canvas></div></div>
+    <div class="card"><h3>Solutions next 24 h: NevAI forecast vs actual</h3><div class="chart"><canvas id="cBufFc"></canvas></div></div>
     <div class="card"><h3>Harvest surge tank</h3><div class="chart"><canvas id="cSump"></canvas></div></div>
     <div class="card"><h3>Cells: N-1 seed and N reactor</h3><div class="chart"><canvas id="cCells"></canvas></div></div>
-    <div class="card"><h3>Viral inactivation pH and eluate surge</h3><div class="chart"><canvas id="cVi"></canvas></div></div>
+    <div class="card"><h3>Viral inactivation and Protein A vessel</h3><div class="chart"><canvas id="cVi"></canvas></div></div>
+    <div class="card"><h3>Downstream vessels (batching between units)</h3><div class="chart"><canvas id="cVes"></canvas></div></div>
     <div class="card"><h3>Wastewater flow and NevAI forecast</h3><div class="chart"><canvas id="cWw"></canvas></div></div>
   </div>
   <div class="card"><h3>Daily wastewater by stream</h3><div class="chart" style="height:320px"><canvas id="cDaily"></canvas></div></div>
+
+  <div class="grid">
+    <div class="card"><h3>Solutions used (litres drawn from each tote)</h3><div class="scroll"><table id="solutions"></table></div></div>
+    <div class="card"><h3>Raw materials (approximate kg)</h3><table id="chemicals"></table></div>
+    <div class="card"><h3>Vessels (peak volume = sizing)</h3><table id="vessels"></table></div>
+    <div class="card"><h3>Drug substance lots</h3><table id="lots"></table></div>
+  </div>
 
   <div class="card"><h3>Portfolio sizing across molecules (same settings)</h3>
     <div id="pfNotes"></div><div class="scroll"><table id="portfolio"></table></div></div>
@@ -228,20 +264,27 @@ const PAL = ['#0e7c7b', '#2563eb', '#d97706', '#7c3aed', '#dc2626', '#16a34a', '
              '#a16207', '#db2777', '#64748b', '#4f46e5', '#059669', '#ea580c', '#9333ea', '#0f766e', '#be123c'];
 const CH = {};
 const SECTIONS = {n1: 'N-1 seed (media in = permeate to waste)', upstream: 'N reactor and TFF (IDB)',
-                  capture: 'Protein A capture', vi: 'Viral inactivation', polish: 'Polishing and virus filter',
-                  sptff: 'SPTFF and formulation', pat: 'PAT sensor noise', bioreactor: 'Legacy ATF perfusion model',
+                  capture: 'Protein A (Case 5 recipe)', vi: 'Viral inactivation (Brij-9 or low pH)',
+                  depth: 'Depth filtration (solution order assumed)', aex: 'AEX chromatography',
+                  cex: 'CEX chromatography', polish: 'Polishing order, yields, virus filter changes',
+                  vrf: 'Virus filtration', sptff: 'UF/DF and formulation', bds: 'BDS hold and fill',
+                  dsp: 'Downstream run-out', pat: 'PAT sensor noise', bioreactor: 'Legacy ATF perfusion model',
                   surge: 'Harvest surge (PCC mode)', pcc: 'PCC (PCC mode)', control: 'Control layer'};
 const SKIP = new Set(['upstream.mode', 'upstream.molecule', 'upstream.custom_points', 'capture.mode']);
-const CHOICES = {'polish.order': [['aex_cex', 'AEX → CEX (site PFD)'], ['cex_aex', 'CEX → AEX (legacy)']]};
-let OPS = ['capture', 'vi', 'cex', 'aex', 'vf', 'sptff'];
-let LAST = null;   // last simulation result (for the print report)
+const CHOICES = {'polish.order': [['aex_cex', 'AEX → CEX (site PFD)'], ['cex_aex', 'CEX → AEX (legacy)']],
+                 'vi.mode': [['detergent', 'Brij-9 before Protein A (Case 5)'], ['low_ph', 'Low-pH hold after Protein A (legacy)']]};
+let OPS = ['capture', 'vi', 'depth', 'adjust', 'aex', 'cex', 'vf', 'sptff', 'bds'];
+let LAST = null;
 const KPIS = [
   ['Drug substance', 'drug_substance_kg', ' kg'], ['Overall yield', 'overall_yield_pct', ' %'],
   ['N seed from N-1', 'n1_seed_vcd', ' ×10⁶/mL'], ['Final permeate titre', 'final_titre_gL', ' g/L'],
   ['First capture cycle', 'first_cycle_n_day', ' (N day)'], ['Permeate before 1st cycle', 'first_cycle_sump_L', ' L'],
   ['Capture cycles', 'capture_cycles', ''], ['Peak cycles / day', 'peak_cycles_day', ''],
-  ['Capture wait', 'capture_wait_h', ' h'], ['Buffer used', 'buffer_m3', ' m³'],
-  ['Buffer per g DS', 'buffer_L_per_g_ds', ' L/g'], ['Peak buffer day', 'buffer_daily_peak_L', ' L'],
+  ['Capture wait', 'capture_wait_h', ' h'], ['Solutions incl. WFI', 'buffer_m3', ' m³'],
+  ['Solutions per g DS', 'buffer_L_per_g_ds', ' L/g'], ['Peak solution day', 'buffer_daily_peak_L', ' L'],
+  ['WFI used directly', 'wfi_m3', ' m³'], ['Brij-9 concentrate', 'detergent_L', ' L'],
+  ['Depth filters', 'depth_filters', ''], ['Virus filter changes', 'vf_changes', ''],
+  ['Lots', 'lots', ''], ['Cryovault containers', 'containers', ''], ['Left in process at end', 'in_process_end_g', ' g'],
   ['Wastewater', 'wastewater_m3', ' m³'], ['Wastewater per kg DS', 'wastewater_m3_per_kg_ds', ' m³/kg'],
   ['WW volume-driven', 'ww_volume_driven_pct', ' %'], ['WW mass-driven', 'ww_mass_driven_pct', ' %'],
   ['NevAI buffer forecast error', 'nevai_buffer_forecast_mape_pct', ' %'],
@@ -252,7 +295,7 @@ async function api(path, body) {
   const opt = body === undefined ? {} :
     {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)};
   const r = await fetch(path, opt);
-  if (r.status === 401) {   // session expired or signed out in another tab
+  if (r.status === 401) {
     location.href = '/login?next=' + encodeURIComponent(location.pathname);
     throw new Error('Signed out');
   }
@@ -307,7 +350,7 @@ function gather() {
   return p;
 }
 
-const pts = (S, k, shift) => S.filter(r => r[k] !== null && r[k] !== undefined)
+const pts = (S, k, shift) => S.filter(r => r[k] !== null && r[k] !== undefined && r[k] !== '')
                               .map(r => ({x: r.day + (shift || 0), y: r[k]}));
 
 function ds(label, data, color, extra) {
@@ -344,7 +387,6 @@ function stacked(w) {
                             backgroundColor: PAL[i % PAL.length], stack: 's'})), 'm³/day', null, true);
 }
 
-// Why a run has no NevAI forecast, shown on the three NevAI charts (screen and print)
 function fcReason(j) {
   if (!j || j.forecaster_used) return '';
   if (!$('useFc').checked) return 'NevAI forecasts were unticked for this run';
@@ -370,7 +412,8 @@ function renderDesign(d) {
   if (d.mode === 'profile') {
     summary = seed + `${d.molecule_label}: permeate ${d.permeate_L_day} L/day · first cycle on N day ${fmt(d.first_cycle_n_day)} ` +
       `after ${fmt(d.first_cycle_sump_L)} L · peak ${d.peak_g_day} g/day on day ${d.peak_day} = ${d.peak_cycles_day} cycles/day ` +
-      `(column limit ${d.max_cycles_day_at_peak}) · buffer ${d.buffer_L_per_g.total.toFixed(2)} L/g, peak ${d.peak_buffer_L_day} L/day · ≈ ${d.ds_kg_est} kg DS`;
+      `(limit ${d.max_cycles_day_at_peak}) · solutions ${d.buffer_L_per_g.total.toFixed(2)} L/g + Brij-9 ` +
+      `${(d.buffer_L_per_g.detergent_L_per_L_load || 0).toFixed(3)} L/L load, peak ${d.peak_buffer_L_day} L/day · ≈ ${d.ds_kg_est} kg DS`;
   } else {
     summary = seed + `perfusion ${d.perfusion_VVD} VVD · bleed ${d.bleed_pct_of_feed}% of feed · harvest titre ${d.harvest_titre_gL} g/L · ` +
       `capture fill ${d.capture_fill_h} h vs recovery ${d.capture_recovery_h} h · ${d.ds_kg_day} kg DS/day`;
@@ -381,7 +424,8 @@ function renderDesign(d) {
     const row = (label, key) => `<tr><th>${label}</th>` + d.daily.map(r => `<td>${fmt(r[key])}</td>`).join('') + '</tr>';
     h += '<h3 style="margin-top:12px">Daily plan from the titre curve (noise-free)</h3><div class="scroll"><table>' +
          row('N day', 'n_day') + row('Titre g/L', 'titre_gL') + row('Product g', 'g') + row('Capture cycles', 'cycles') +
-         row('Capture buffer L', 'capture_buffer_L') + row('All buffer L', 'buffer_L') + '</table></div>';
+         row('Capture solutions L', 'capture_buffer_L') + row('Brij-9 L', 'detergent_L') +
+         row('All solutions L', 'buffer_L') + '</table></div>';
   }
   $('notes').innerHTML = h;
 }
@@ -390,11 +434,23 @@ function renderPortfolio(pf) {
   $('pfNotes').innerHTML = pf.notes.map(n => `<div class="note">${n}</div>`).join('');
   $('portfolio').innerHTML = '<tr><th>Molecule</th><th>Peak g/day</th><th>Peak day</th><th>Peak cycles/day</th>' +
     '<th>Column limit/day</th><th>First cycle (N day)</th><th>Permeate before 1st cycle L</th>' +
-    '<th>Peak buffer L/day</th><th>% of sizing case</th><th>Product g (run)</th></tr>' +
+    '<th>Peak solutions L/day</th><th>% of sizing case</th><th>Product g (run)</th></tr>' +
     pf.rows.map(r => `<tr><td>${r.label}</td><td>${fmt(r.peak_g_day)}</td><td>${fmt(r.peak_day)}</td>` +
       `<td>${fmt(r.peak_cycles_day)}</td><td>${fmt(r.max_cycles_day_at_peak)}</td><td>${fmt(r.first_cycle_n_day)}</td>` +
       `<td>${fmt(r.first_cycle_sump_L)}</td><td>${fmt(r.peak_buffer_L_day)}</td><td>${fmt(r.pct_of_buffer_sizing)}</td>` +
       `<td>${fmt(r.total_g)}</td></tr>`).join('');
+}
+
+function dspTables(j) {
+  $('solutions').innerHTML = '<tr><th>Solution</th><th>Used in</th><th class="num">L</th></tr>' +
+    (j.solutions || []).map(r => `<tr><td>${esc(r.label)}</td><td class="muted">${esc(r.where)}</td><td class="num">${fmt(r.L)}</td></tr>`).join('');
+  $('chemicals').innerHTML = '<tr><th>Raw material</th><th class="num">kg</th></tr>' +
+    (j.chemicals || []).map(r => `<tr><td>${esc(r.name)}</td><td class="num">${fmt(r.kg)}</td></tr>`).join('');
+  $('vessels').innerHTML = '<tr><th>Vessel</th><th class="num">Peak L</th><th class="num">Left at end L</th><th class="num">Left at end g</th></tr>' +
+    (j.vessels || []).map(r => `<tr><td>${esc(r.label)}</td><td class="num">${fmt(r.peak_L)}</td><td class="num">${fmt(r.end_L)}</td><td class="num">${fmt(r.end_g)}</td></tr>`).join('');
+  $('lots').innerHTML = '<tr><th>Lot</th><th class="num">Day</th><th class="num">g</th><th class="num">L</th><th class="num">Containers</th></tr>' +
+    ((j.lots || []).length ? j.lots.map(r => `<tr><td>${r.lot}</td><td class="num">${fmt(r.day)}</td><td class="num">${fmt(r.g)}</td><td class="num">${fmt(r.L)}</td><td class="num">${fmt(r.containers)}</td></tr>`).join('')
+      : '<tr><td colspan="5" class="muted">No lot filled in this run</td></tr>');
 }
 
 function tables(j) {
@@ -413,6 +469,7 @@ function tables(j) {
   $('events').innerHTML = '<tr><th>Day</th><th>Type</th><th>Message</th></tr>' +
     (j.events.length ? j.events.map(e => `<tr><td>${e.day}</td><td>${e.type}</td><td>${e.msg}</td></tr>`).join('')
                      : '<tr><td colspan="3" class="muted">No events</td></tr>');
+  dspTables(j);
 }
 
 function render(j) {
@@ -430,7 +487,7 @@ function render(j) {
      backgroundColor: C[4], yAxisID: 'y2', pointRadius: 2, borderWidth: 1.6}], 'g/day', 'cycles/day');
   bars('cBuffer', days, OPS.map((op, i) => ({label: op, data: D.map(d => d['buf_' + op]),
                                              backgroundColor: PAL[i % PAL.length], stack: 'b'})), 'L/day', null, true);
-  line('cBufFc', [ds('Actual buffer, next 24 h', pts(S, 'buffer_next24_L'), C[0]),
+  line('cBufFc', [ds('Actual, next 24 h', pts(S, 'buffer_next24_L'), C[0]),
                   ds('NevAI forecast, next 24 h', pts(S, 'buffer_fc_24h_L'), C[4], {showLine: false, pointRadius: 2})], 'L');
   line('cSump', [ds('Surge tank volume L', pts(S, 'sump_L'), C[0]),
                  ds('Product in surge tank g', pts(S, 'sump_g'), C[3], {yAxisID: 'y2'})], 'L', 'g');
@@ -438,8 +495,14 @@ function render(j) {
                   ds('Viability %', S.filter(r => r.viability !== null && r.viability !== undefined)
                        .map(r => ({x: r.day, y: r.viability * 100})), C[3], {yAxisID: 'y2'})],
        '×10⁶ cells/mL', 'viability %');
-  line('cVi', [ds('VI pH', pts(S, 'vi_pH'), C[3]),
-               ds('Eluate surge L', pts(S, 'eluate_surge_L'), C[0], {yAxisID: 'y2'})], 'pH', 'L');
+  line('cVi', [ds('VI pH (low-pH mode)', pts(S, 'vi_pH'), C[3]),
+               ds('Protein A vessel L', pts(S, 'eluate_surge_L'), C[0], {yAxisID: 'y2'}),
+               ds('Brij-9 dosed L/h', pts(S, 'det_Lh'), C[4], {yAxisID: 'y2'})], 'pH', 'L');
+  line('cVes', [['eluate_surge_L', 'Protein A vessel'], ['vip_L', 'VI pool'], ['dfs_L', 'Depth filtration surge'],
+                ['aexv_L', 'AEX vessel'], ['cexv_L', 'CEX vessel'], ['vrfv_L', 'VRF vessel'],
+                ['ufdf_L', 'UF/DF vessel'], ['bdsm_L', 'BDS mixer']]
+       .filter(([key]) => S.some(r => r[key] > 0))
+       .map(([key, lab], i) => ds(lab, pts(S, key), PAL[i % PAL.length])), 'L');
   line('cWw', [ds('Wastewater L/h', pts(S, 'ww_total_Lh'), C[5]),
                ds('NevAI next-24 h average L/h', S.filter(r => r.ww_fc_24h_L !== null && r.ww_fc_24h_L !== undefined)
                    .map(r => ({x: r.day, y: r.ww_fc_24h_L / 24})), C[4], {showLine: false, pointRadius: 2})], 'L/h');
@@ -448,12 +511,14 @@ function render(j) {
   fcNotes(j);
   if (window.PFD) PFD.load(j);
   if (window.PFDVideo) PFDVideo.load(j);
+  if (window.SeqFilm) SeqFilm.load(j);
 }
 
 async function run() {
   $('runBtn').disabled = true;
   if (window.PFD) PFD.pause();
   if (window.PFDVideo) PFDVideo.stop();
+  if (window.SeqFilm) SeqFilm.stop();
   setStatus('Running…');
   try {
     const params = gather();
@@ -464,7 +529,7 @@ async function run() {
     render(j);
     const why = fcReason(j);
     setStatus('Done' + (j.forecaster_used ? ' · NevAI forecasts on' : ' · NevAI not used: ' + why));
-    if (!j.forecaster_used && $('useFc').checked) refreshAI();   // start polling; re-runs when training ends
+    if (!j.forecaster_used && $('useFc').checked) refreshAI();
     api('/api/icb/portfolio', {params}).then(renderPortfolio)
       .catch(e => { $('pfNotes').textContent = e.message; });
   } catch (e) { setStatus(e.message, true); }
@@ -502,7 +567,6 @@ async function trainAI() {
   refreshAI();
 }
 
-// ── print / save as PDF ──────────────────────────────────────────────
 function paramTables(p) {
   const tbl = (title, obj) => '<table><tr><th colspan="2">' + esc(title) + '</th></tr>' +
     Object.entries(obj).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(typeof v === 'object' ? JSON.stringify(v) : v)}</td></tr>`).join('') +
@@ -516,7 +580,7 @@ function paramTables(p) {
 function preparePrint() {
   if (window.PFD) PFD.pause();
   if (window.PFDVideo) PFDVideo.stop();
-  // charts -> images, so they print at the right size
+  if (window.SeqFilm) SeqFilm.stop();
   for (const [id, ch] of Object.entries(CH)) {
     const box = $(id).parentNode;
     let img = box.querySelector('img.pimg');
@@ -529,6 +593,7 @@ function preparePrint() {
   $('printHead').innerHTML = '<h2>IDB mAb digital twin — simulation report</h2><div class="muted">' +
     esc([new Date().toLocaleString(), mol, $('upMode').selectedOptions[0].textContent,
          $('capMode').selectedOptions[0].textContent,
+         p ? (p.vi.mode === 'low_ph' ? 'low-pH VI' : 'Brij-9 VI') : '',
          p ? 'polishing ' + (p.polish.order === 'cex_aex' ? 'CEX → AEX' : 'AEX → CEX') : '',
          'seed ' + (LAST ? LAST.seed : '—'),
          LAST && LAST.forecaster_used ? 'NevAI on' : 'NevAI off' + (why ? ' (' + why + ')' : '')].filter(Boolean).join(' · ')) +
@@ -542,9 +607,9 @@ function printReport() {
       !confirm('This run has no NevAI forecasts (' + fcReason(LAST) + '), so the NevAI charts will be empty.\n\n' +
                'Print anyway? (Cancel, wait for "NevAI: ready", then Run simulation.)')) return;
   preparePrint();
-  setTimeout(() => window.print(), 50);   // let the chart images decode
+  setTimeout(() => window.print(), 50);
 }
-window.addEventListener('beforeprint', preparePrint);   // also covers Cmd/Ctrl + P
+window.addEventListener('beforeprint', preparePrint);
 
 async function init() {
   api('/api/me').then(m => {
@@ -552,6 +617,7 @@ async function init() {
   }).catch(() => {});
   if (window.PFD) PFD.init();
   if (window.PFDVideo) PFDVideo.init();
+  if (window.SeqFilm) SeqFilm.init();
   const def = await api('/api/icb/defaults');
   OPS = def.buffer_ops || OPS;
   buildForm(def.params);
@@ -563,7 +629,7 @@ async function init() {
   $('runBtn').onclick = run;
   $('trainBtn').onclick = trainAI;
   $('printBtn').onclick = printReport;
-  $('molecule').onchange = () => {   // the custom curve box lives in the Parameters panel
+  $('molecule').onchange = () => {
     if ($('molecule').value === 'custom') { $('paramPanel').open = true; $('customPts').focus(); }
   };
   await refreshAI();
