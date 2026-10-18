@@ -53,51 +53,53 @@
     U('divert', 'Pre-capture divert', 'Divert valve before capture', 'XV-101', 0, [470, 100, 565, 242], ['2'],
       'Permeate goes to drain until capture starts.'),
     U('surge', 'Surge tank', 'Conditioned media surge tank', 'T-101', 0, [548, 66, 690, 244], ['3', '4'],
-      'Collects permeate; PAT titre × volume = grams waiting for capture.'),
-    U('pabuf', 'Prot A buffers', 'Protein A buffers + WFI', 'Buf A', 1, [28, 296, 712, 434], ['7', '5'],
-      'Equilibration, wash, elution, strip, CIP and re-equilibration, called up per cycle.'),
-    U('pa', 'Protein A', 'Protein A capture', 'C-101', 0, [722, 50, 968, 304], ['9', '10', '11', '12', '13', '14', 'W1'],
-      'One batch cycle each time the surge tank holds one column load.'),
-    U('vi', 'Prot A SUM · VI', 'Protein A vessel SUM · low-pH VI', 'T-102', 0, [978, 78, 1104, 248], ['14', '15'],
-      'Eluate pool held at low pH for viral inactivation, then neutralised.'),
-    U('vibuf', 'VI titrants', 'VI titrants + post-capture buffers', 'Buf VI', 1, [938, 292, 1428, 434], ['17', '16'],
-      'Acid and base titrants for low-pH viral inactivation, with WFI.'),
+      'Collects permeate; PAT titre × volume decides when a Protein A load is ready.'),
+    U('det', 'Brij-9 dosing', 'Brij-9 detergent dosing', 'Brij-9', 1, [636, 0, 744, 150], ['8'],
+      '10 %wt concentrate dosed in-line into each load: kills enveloped viruses before the column.'),
+    U('pabuf', 'Prot A buffers', 'Protein A buffers + WFI', 'Buf A', 1, [28, 296, 712, 434], ['7', '5', '6'],
+      'Post-load wash, wash 1 (arginine pH 9), wash 2 (pH 6.5), elution pH 4.45, strip, 0.5 N NaOH, re-equilibration.'),
+    U('pa', 'Protein A', 'Protein A capture: 2 trains', 'C-101', 0, [722, 50, 968, 304], ['9', '10', '11', '12', '13', '14', 'W1'],
+      'Columns 1&2 and 3&4 alternate: one loads while the other washes, elutes, strips and cleans.'),
+    U('vi', 'Prot A vessel SUM', 'Protein A vessel SUM', 'T-102', 0, [978, 78, 1104, 248], ['14', '15'],
+      'Pools eluates; depth filtration starts after three elution volumes.'),
+    U('vibuf', 'Depth solutions', 'Depth filtration solutions + WFI', 'Buf DF', 1, [938, 292, 1428, 434], ['17', '16', '18'],
+      'Acetate pH 5.0, 0.5 M NaCl (2 M in-line), arginine, 1 N NaOH and Tris flushes (order assumed).'),
     U('depth', 'Depth filtration', 'Depth filtration + surge', 'FH-101', 0, [1112, 78, 1438, 300], ['19', '20', '21'],
-      'Clarifies the neutralised VI pool (on the flowsheet; no loss in the model).'),
-    U('base', 'Base addition', 'On-line base addition', 'SM-201', 1, [18, 470, 182, 640], ['26'],
-      'Tris base / NaCl conditioning ahead of AEX (shown in the circuit; not simulated).'),
-    U('aexbuf', 'AEX buffers', 'AEX buffers + WFI', 'Buf AEX', 1, [28, 692, 432, 842], ['23', '22'],
-      'AEX equilibration, flush and NaOH sanitisation, per gram loaded.'),
-    U('aex', 'AEX', 'AEX chromatography', 'C-201', 0, [198, 455, 345, 650], ['26', '27', '28', '29', '30'],
-      'Flow-through anion exchange: product passes, impurities bind.'),
+      'New filter each batch: WFI flush, equilibrate, filter, chase, post-use flushes.'),
+    U('base', 'Base addition', 'On-line base addition', 'SM-201', 1, [18, 470, 182, 640], ['25'],
+      '2 M Tris base and 2 M NaCl dosed into the AEX load to set pH and conductivity.'),
+    U('aexbuf', 'AEX buffers', 'AEX buffers + WFI', 'Buf AEX', 1, [28, 692, 432, 842], ['23', '22', '24'],
+      'Equilibration, chase, strip, 1 N NaOH CIP and benzyl alcohol storage.'),
+    U('aex', 'AEX', 'AEX chromatography: 2 columns', 'C-201', 0, [198, 455, 345, 650], ['26', '27', '28', '29', '30'],
+      'Flow-through: product passes and is chased out; then strip, CIP, re-equilibrate.'),
     U('aexsum', 'AEX SUM', 'AEX vessel SUM', 'T-201', 0, [350, 462, 488, 628], ['31', '32'],
       'AEX pool hold before acid conditioning.'),
-    U('acid', 'Acid addition', 'On-line acid addition', 'SM-202', 1, [482, 470, 588, 640], ['37'],
-      'Acetic acid conditioning ahead of CEX (shown in the circuit; not simulated).'),
-    U('cexbuf', 'CEX buffers', 'CEX buffers + WFI', 'Buf CEX', 1, [428, 692, 912, 842], ['34', '33'],
-      'CEX equilibration, wash, elution, strip and CIP, per gram loaded.'),
-    U('cex', 'CEX', 'CEX chromatography', 'C-203', 0, [600, 455, 800, 674], ['37', '38', '39', '40', '41', 'W2'],
-      'Bind/elute cation exchange; load flow-through to drain.'),
+    U('acid', 'Acid addition', 'On-line acid addition', 'SM-202', 1, [482, 470, 588, 640], ['36'],
+      '1 M acetic acid dosed into the CEX load to bring it to pH 5.5.'),
+    U('cexbuf', 'CEX buffers', 'CEX buffers + WFI', 'Buf CEX', 1, [428, 692, 912, 842], ['34', '33', '35'],
+      'Equilibration/wash pH 5.5, elution 280 mM NaCl, strip, 1 N NaOH CIP, storage.'),
+    U('cex', 'CEX', 'CEX chromatography: 2 columns', 'C-203', 0, [600, 455, 800, 674], ['37', '38', '39', '40', '41', 'W2'],
+      'Bind and elute: load, wash, elute the peak, strip, CIP, re-equilibrate.'),
     U('cexsum', 'CEX SUM', 'CEX vessel SUM', 'T-202', 0, [802, 462, 930, 628], ['42', '43'],
-      'CEX eluate pool hold.'),
-    U('vfbuf', 'VF flush buffer', 'Virus-filter flush buffer + WFI', 'Buf VF', 1, [906, 692, 1074, 842], ['45', '44'],
-      'Pre-use flush, called up at each virus-filter change.'),
+      'Pools CEX eluates; virus filtration starts after three elution volumes.'),
+    U('vfbuf', 'VF buffer', 'Virus-filter buffer + WFI', 'Buf VF', 1, [906, 692, 1074, 842], ['45', '44', '46'],
+      'WFI flush and equilibration per new filter; chase per batch.'),
     U('vrf', 'Virus filtration', 'Virus retentive filtration', 'F-301', 0, [26, 905, 232, 1072], ['47', '48', '49', '50', '51', '52'],
-      'Filters A and B alternate by lot.'),
+      'Holders A and B alternate at each filter change.'),
     U('vrfsum', 'VRF SUM', 'VRF vessel SUM', 'T-301', 0, [238, 858, 372, 1018], ['53', '54'],
-      'Virus filtrate pool hold.'),
-    U('dfbuf', 'UF/DF buffers', 'UF/DF diafiltration buffers + WFI', 'Buf DF', 1, [388, 1000, 632, 1124], ['56', '55'],
-      'Acetate / proline diafiltration buffer.'),
-    U('ufdf', 'UF/DF', 'Ultrafiltration / diafiltration (SPTFF)', 'UF-301', 0, [470, 904, 650, 1052], ['58', 'W3', '59'],
-      'Concentrates to target with inline diafiltration; permeate to drain.'),
+      'Collects virus filtrate for one lot window.'),
+    U('dfbuf', 'UF/DF buffers', 'UF/DF buffers + WFI', 'Buf DF', 1, [388, 1000, 632, 1124], ['56', '55', '57'],
+      'Diafiltration pH 5.1 proline, recovery pH 5.3 proline, NaOH CIP and storage.'),
+    U('ufdf', 'UF/DF', 'Ultrafiltration / diafiltration', 'UF-301', 0, [470, 904, 650, 1052], ['58', 'W3', '59'],
+      'Per lot: transfer in, concentrate, diafilter, concentrate, recover, spike, transfer out, clean.'),
     U('ufsum', 'UF/DF SUM', 'UF/DF vessel SUM', 'T-302', 0, [640, 858, 775, 1018], ['60'],
-      'Concentrated retentate hold before formulation.'),
-    U('form', 'Formulation buffer', 'Formulation buffer', 'Form.', 1, [758, 1000, 842, 1124], ['61'],
-      'Excipients: acetate, proline, sucrose, P188.'),
+      'Recirculation vessel for the lot being processed.'),
+    U('form', 'Formulation spike', 'Formulation spike', 'Form.', 1, [758, 1000, 842, 1124], ['61'],
+      'Acetate, proline, 1.17 M sucrose and poloxamer 188 added to reach the final formulation.'),
     U('bds', 'BDS hold', 'BDS hold mixer', 'M-301', 0, [848, 856, 985, 1018], ['62'],
-      'Formulated bulk drug substance mixed and held.'),
+      'Each lot is mixed, then filtered through 0.2 µm.'),
     U('cryo', 'Cryovault', 'Cryovault containers', 'Cryo', 0, [1004, 926, 1126, 1062], ['63'],
-      'Bulk drug substance filled and frozen.'),
+      'Bulk drug substance filled into containers and frozen.'),
   ];
 
   let J = null, G = null, BASE = null, BASE_K = 0, PLAN = null, RUN = null, LASTURL = null;
@@ -196,10 +198,14 @@
     G = G || PFD.geo();
     const S = PFD.series(), n = S.length;
     const find = f => { const k = S.findIndex(f); return k < 0 ? null : k; };
-    const iInoc = find(r => r.phase === 1), iCap = find(r => r.capture_switch > 0), iDs = find(r => r.ds_g_h > 0);
+    const paLoads = Object.keys(LST).filter(k => k.indexOf('pa') === 0)
+      .map(k => (LST[k].find(s => s.kind === 'load') || {}).t0).filter(v => v !== undefined);
+    const tCap = paLoads.length ? Math.min(...paLoads) : null;   // first Protein A load starts
+    const iInoc = find(r => r.phase === 1), iDs = find(r => r.ds_g_h > 0);
+    const iCap = tCap !== null ? find(r => r.h >= Math.floor(tCap)) : find(r => r.capture_switch > 0);
     let i0 = 0;
     if (o.start === 'inoc' && iInoc !== null) i0 = iInoc;
-    else if (o.start === 'cap' && iCap !== null) i0 = Math.max(0, iCap - 2);
+    else if (o.start === 'cap' && iCap !== null) i0 = Math.max(0, iCap - 1);
     else if (o.start === 'ds' && iDs !== null) i0 = Math.max(0, iDs - 1);
     else if (o.start === 'custom') i0 = clamp(Math.round(o.hour), 0, n - 1);
     let i1;
@@ -262,7 +268,8 @@
       fcUsed: !!J.forecaster_used,
       title: (J.design && J.design.molecule_label) || 'Legacy ATF perfusion model',
       subtitle: [p.upstream.mode === 'mechanistic' ? 'Legacy ATF perfusion' : 'IDB titre curve',
-                 p.capture.mode === 'pcc' ? '3-column PCC' : 'batch Protein A',
+                 p.capture.mode === 'pcc' ? '3-column PCC' : 'Protein A 2 trains',
+                 p.vi && p.vi.mode === 'low_ph' ? 'low-pH VI' : 'Brij-9 VI',
                  p.polish.order === 'cex_aex' ? 'CEX → AEX' : 'AEX → CEX',
                  J.forecaster_used ? 'NevAI on' : 'NevAI off'].join(' · '),
       sum: {g, ds, buf, ww, cyc},
@@ -567,6 +574,55 @@
     c.restore();
   }
 
+  // ── steps running now, from the run's step log ──
+  const SOLC = {wfi: '#7dd3fc', brij_10: '#a855f7', tris_74: '#0e7c7b', pa_wash1: '#f59e0b', pa_wash2: '#fbbf24',
+    pa_elute: '#dc2626', pa_strip: '#f43f5e', naoh_05n: '#475569', naoh_1n: '#334155', naoh_01n: '#64748b',
+    storage: '#16a34a', df_ac50: '#fb923c', nacl_05m: '#60a5fa', nacl_2m: '#3b82f6', df_arg: '#c084fc',
+    tris_base_2m: '#14b8a6', tris_nacl_74: '#2563eb', acetic_1m: '#e11d48', cex_eq: '#eab308',
+    cex_elute: '#be123c', uf_df1: '#8b5cf6', uf_df2: '#6366f1', uf_spike: '#db2777', vi_acid: '#b91c1c', vi_base: '#0891b2'};
+  const KINDC = {load: '#64748b', hold: '#94a3b8', perm: '#a5b4fc', out: '#0ea5e9'};
+  let LST = {}, LLAB = {};
+  function indexSteps(j) {
+    LST = {}; LLAB = {};
+    (j.lanes || []).forEach(l => { LLAB[l.key] = l.label; LST[l.key] = []; });
+    (j.steps || []).forEach(s => { (LST[s.lane] = LST[s.lane] || []).push(s); });
+    for (const k in LST) LST[k].sort((a, b) => a.t0 - b.t0);
+  }
+  function stepsAt(t) {
+    const out = [];
+    for (const k of Object.keys(LLAB)) {
+      const a = LST[k] || [];
+      let lo = 0, hi = a.length - 1, f = -1;
+      while (lo <= hi) { const m = (lo + hi) >> 1; if (a[m].t0 <= t) { f = m; lo = m + 1; } else hi = m - 1; }
+      for (let i = f; i >= 0 && i > f - 2; i--) if (a[i].t1 > t) { out.push({label: LLAB[k], s: a[i]}); break; }
+    }
+    return out;
+  }
+  function stepStrip(c, t, a) {
+    if (a <= 0.01 || !Object.keys(LLAB).length) return;
+    const now = stepsAt(t), cols = 3, rowH = 34, rows = Math.max(1, Math.ceil(now.length / cols));
+    const w = VP.w - 56, h = 52 + rows * rowH, x = VP.x + 28, y = VP.y + VP.h - h - 20;
+    c.save(); c.globalAlpha = a;
+    c.shadowColor = 'rgba(15,23,42,0.18)'; c.shadowBlur = 30; c.shadowOffsetY = 10;
+    c.beginPath(); rr(c, x, y, w, h, 24); c.fillStyle = 'rgba(255,255,255,0.94)'; c.fill();
+    c.shadowColor = 'transparent'; c.shadowBlur = 0; c.shadowOffsetY = 0;
+    c.textAlign = 'left'; c.fillStyle = TEAL; c.font = `700 14px ${FONT}`; c.fillText('STEPS RUNNING NOW', x + 24, y + 30);
+    c.textAlign = 'right'; c.fillStyle = GREY; c.font = `500 14px ${FONT}`;
+    c.fillText(now.length ? `${now.length} unit${now.length > 1 ? 's' : ''} busy` : 'all units idle', x + w - 24, y + 30);
+    const cw = (w - 48) / cols;
+    now.forEach((o, i) => {
+      const cx = x + 24 + (i % cols) * cw, cy = y + 46 + Math.floor(i / cols) * rowH, bw = cw - 12, bh = rowH - 8;
+      const col = (o.s.sol && SOLC[o.s.sol]) || KINDC[o.s.kind] || '#94a3b8';
+      const p = clamp((t - o.s.t0) / Math.max(o.s.t1 - o.s.t0, 1e-6));
+      c.beginPath(); rr(c, cx, cy, bw, bh, 8); c.fillStyle = '#f4f6f9'; c.fill();
+      c.beginPath(); rr(c, cx, cy, Math.max(10, bw * p), bh, 8); c.fillStyle = hexA(col, 0.30); c.fill();
+      c.beginPath(); c.arc(cx + 14, cy + bh / 2, 6, 0, 6.2832); c.fillStyle = col; c.fill();
+      c.textAlign = 'left'; c.fillStyle = INK; c.font = `600 15px ${FONT}`;
+      c.fillText(fit(c, o.label + ' · ' + o.s.step, bw - 36), cx + 28, cy + bh / 2 + 5);
+    });
+    c.restore();
+  }
+
   function frame(c, t) {
     const P = PLAN, SC = c.canvas.width / VW;
     const s = segAt(t), lt = t - s.t0, p = s.dur > 0 ? clamp(lt / s.dur) : 1;
@@ -596,6 +652,7 @@
     bg.addColorStop(0, '#eef1f6'); bg.addColorStop(1, '#dde3ec');
     c.fillStyle = bg; c.fillRect(0, 0, VW, VH);
     drawPFD(c, t, cam, st, k, spot);
+    if (s.type !== 'title' && s.type !== 'end') stepStrip(c, clock, 1 - (cap ? clamp(cap.a) : 0));
     if (isl && isl.a > 0) island(c, isl);
     if (cap && cap.a > 0) caption(c, cap.u, st, cap.a, cap.dy);
     hud(c, t, clock, st);
@@ -723,7 +780,7 @@
     c.fillText('Run a simulation, then Preview or Record', 960, 550);
   }
 
-  function load(j) { J = j; PLAN = null; estimate(); poster().then(estimate); }
+  function load(j) { J = j; PLAN = null; indexSteps(j); estimate(); poster().then(estimate); }
 
   window.PFDVideo = {init, load, stop};
 })();

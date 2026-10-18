@@ -384,7 +384,7 @@
     txt(1192, y + 3, 'Vessel shading = liquid level', 'lb', 'start');
     y += 18; txt(1147, y + 3, 'Capsule = 0.2 µm filter · circle = pump', 'lb', 'start');
     y += 14; txt(1147, y + 3, 'Bow-tie = valve · zig-zag box = static mixer', 'lb', 'start');
-    y += 14; txt(1147, y + 3, 'Grey dashed = on the flowsheet, not simulated', 'lb', 'start');
+    y += 14; txt(1147, y + 3, 'Grey dashed = no value this hour', 'lb', 'start');
     y += 14; txt(1147, y + 3, 'Values: hourly, from the last simulation run', 'lb', 'start');
   }
 
@@ -409,8 +409,13 @@
   }
 
   // ── stream values: [id, description, fn(row, ctx) -> {L: L/h, g: g/h} | null = not modelled] ──
+  // Step names and kinds per lane come from the simulator (series keys st_<lane>, sk_<lane>).
   const Z = {L: 0, g: 0};
-  const duty = (c, which, v) => (c.duty === which ? v : Z);
+  const LANES = ['det', 'pa1', 'pa2', 'vi', 'depth', 'base', 'aex1', 'aex2', 'acid', 'cex1', 'cex2', 'vrf1', 'vrf2', 'ufdf', 'bds'];
+  const busy = (c, k) => !!c.sk[k];
+  const loading = (c, k) => c.sk[k] === 'load';
+  const owns = (c, k, o) => loading(c, k) || (!loading(c, o) && busy(c, k) && !busy(c, o));
+  const pick = (c, k, o, v) => (owns(c, k, o) ? v : Z);
   const STREAMS = [
     ['U1', 'Media feed to the N-1 perfusion seed', r => ({L: r.phase ? 0 : r.ww_n1_permeate})],
     ['U2', 'N-1 cell-free permeate to waste', r => ({L: r.ww_n1_permeate})],
@@ -421,91 +426,102 @@
     ['1', 'TFF permeate (perfusion harvest from USP)', r => ({L: r.Fh_Lh, g: r.harvest_g_h})],
     ['2', 'Permeate to waste before capture starts', r => ({L: r.ww_ramp_harvest, g: r.ww_ramp_harvest * r.titre_harvest})],
     ['3', 'Permeate to the conditioned media surge tank', r => { const L = Math.max(0, r.Fh_Lh - r.ww_ramp_harvest); return {L, g: L * r.titre_harvest}; }],
-    ['4', 'Surge tank to Protein A load (g ≈ sump concentration)', (r, c) => ({L: r.Fload_Lh, g: r.Fload_Lh * c.cs})],
-    ['8', 'Detergent (10 %wt Brij-9) — not modelled', null],
-    ['6', 'WFI — included in buffer volumes in the model', null],
-    ['7', 'Protein A buffers (equil., wash, elution, strip, CIP, re-equil.)', r => ({L: r.buf_capture})],
+    ['4', 'Surge tank to the Protein A load (g ≈ surge concentration)', (r, c) => ({L: r.Fload_Lh, g: r.Fload_Lh * c.cs})],
+    ['8', 'Brij-9 concentrate dosed into the load', r => ({L: r.det_Lh})],
+    ['6', 'WFI to Protein A (flushes, in-line NaOH dilution)', r => ({L: r.wfi_capture})],
+    ['7', 'Protein A buffers from totes', r => ({L: Math.max(0, r.buf_capture - r.wfi_capture)})],
     ['5', 'Protein A buffers + WFI', r => ({L: r.buf_capture})],
-    ['9', 'Column feed (load + buffers, hourly totals)', (r, c) => c.feed],
-    ['10', 'Feed to Protein A columns 1 & 2', (r, c) => (c.loadA ? c.feed : Z)],
-    ['11', 'Feed to Protein A columns 3 & 4', (r, c) => (c.loadA ? Z : c.feed)],
-    ['12', 'Protein A eluate, columns 1 & 2', (r, c) => ({L: c.elutA ? r.capture_switch * c.elu : 0})],
-    ['13', 'Protein A eluate, columns 3 & 4', (r, c) => ({L: c.elutA ? 0 : r.capture_switch * c.elu})],
-    ['14', 'Protein A eluate to Protein A vessel SUM', (r, c) => ({L: r.capture_switch * c.elu})],
-    ['W1', 'Protein A flow-through, buffers, strip and CIP to drain',
+    ['9', 'Column feed: load + Brij-9 + buffers (hourly totals)', (r, c) => c.feed],
+    ['10', 'Feed to Protein A columns 1 & 2', (r, c) => c.paA],
+    ['11', 'Feed to Protein A columns 3 & 4', (r, c) => c.paB],
+    ['12', 'Protein A eluate, columns 1 & 2', r => ({L: r.elu_pa1})],
+    ['13', 'Protein A eluate, columns 3 & 4', r => ({L: r.elu_pa2})],
+    ['14', 'Protein A eluate to Protein A vessel SUM', r => ({L: r.elu_pa1 + r.elu_pa2})],
+    ['W1', 'Protein A flow-through, washes, strip and CIP to drain',
       r => ({L: r.ww_capture_flowthrough + r.ww_capture_buffers + r.ww_capture_strip_cip})],
-    ['15', 'Low-pH VI pool leaving the Protein A vessel SUM', (r, c) => ({L: r.F_vi_Lh, g: r.g_vi / c.viy})],
-    ['18', 'WFI — not modelled', null],
-    ['17', 'VI acid and base titrants', r => ({L: r.buf_vi})],
-    ['16', 'VI titrants + WFI', r => ({L: r.buf_vi})],
-    ['19', 'Neutralised VI pool to depth filtration', (r, c) => c.vi],
-    ['20', 'Depth filtrate (depth filtration not modelled: no loss)', (r, c) => c.vi],
-    ['21', 'Depth filtration surge tank to AEX', (r, c) => c.vi],
-    ['25', 'On-line base addition (2 M Tris base / 2 M NaCl) — not modelled', null],
-    ['24', 'WFI — not modelled', null],
-    ['23', 'AEX buffers', r => ({L: r.buf_aex})],
+    ['15', 'Protein A vessel SUM out (to depth filtration; to low-pH VI in legacy mode)',
+      (r, c) => (c.lowph ? {L: r.F_vi_Lh} : {L: r.L_vi, g: r.g_vi})],
+    ['18', 'WFI to depth filtration', r => ({L: r.wfi_depth})],
+    ['17', 'Depth filtration solutions (+ VI titrants in low-pH mode)', (r, c) => ({L: Math.max(0, r.buf_depth - r.wfi_depth) + (c.lowph ? r.buf_vi : 0)})],
+    ['16', 'Depth filtration solutions + WFI', (r, c) => ({L: r.buf_depth + (c.lowph ? r.buf_vi : 0)})],
+    ['19', 'Pool to the depth filter', r => ({L: r.L_vi, g: r.g_vi})],
+    ['20', 'Depth filtrate + chase to the surge tank', r => ({L: r.L_dep, g: r.g_dep})],
+    ['21', 'Depth filtration surge tank to the first polishing column', (r, c) => c.p1In],
+    ['25', 'On-line base addition (2 M Tris base + 2 M NaCl)', r => ({L: r.L_base})],
+    ['24', 'WFI to AEX', r => ({L: r.wfi_aex})],
+    ['23', 'AEX buffers from totes', r => ({L: Math.max(0, r.buf_aex - r.wfi_aex)})],
     ['22', 'AEX buffers + WFI', r => ({L: r.buf_aex})],
-    ['26', 'AEX load', (r, c) => c.aexIn],
-    ['27', 'AEX column 1 load', (r, c) => duty(c, 0, c.aexIn)],
-    ['28', 'AEX column 2 load', (r, c) => duty(c, 1, c.aexIn)],
-    ['29', 'AEX column 1 flow-through pool', (r, c) => duty(c, 0, c.aex)],
-    ['30', 'AEX column 2 flow-through pool', (r, c) => duty(c, 1, c.aex)],
+    ['26', 'AEX load after base addition', (r, c) => c.aexLoad],
+    ['27', 'AEX column 1 load', (r, c) => (loading(c, 'aex1') ? c.aexLoad : Z)],
+    ['28', 'AEX column 2 load', (r, c) => (loading(c, 'aex2') ? c.aexLoad : Z)],
+    ['29', 'AEX column 1 flow-through pool', (r, c) => pick(c, 'aex1', 'aex2', c.aex)],
+    ['30', 'AEX column 2 flow-through pool', (r, c) => pick(c, 'aex2', 'aex1', c.aex)],
     ['31', 'AEX pool to AEX vessel SUM', (r, c) => c.aex],
-    ['32', 'AEX vessel SUM to on-line acid addition', (r, c) => c.aex],
-    ['36', 'On-line acid addition (1 M acetic acid) — not modelled', null],
-    ['35', 'WFI — not modelled', null],
-    ['34', 'CEX buffers', r => ({L: r.buf_cex})],
+    ['32', 'AEX vessel SUM out', (r, c) => (c.aexFirst ? {L: r.L_cex_in, g: r.g_cex_in} : {L: r.L_vf_in})],
+    ['36', 'On-line acid addition (1 M acetic acid)', r => ({L: r.L_acid})],
+    ['35', 'WFI to CEX', r => ({L: r.wfi_cex})],
+    ['34', 'CEX buffers from totes', r => ({L: Math.max(0, r.buf_cex - r.wfi_cex)})],
     ['33', 'CEX buffers + WFI', r => ({L: r.buf_cex})],
-    ['37', 'CEX load', (r, c) => c.cexIn],
-    ['38', 'CEX column 1 load', (r, c) => duty(c, 0, c.cexIn)],
-    ['39', 'CEX column 2 load', (r, c) => duty(c, 1, c.cexIn)],
+    ['37', 'CEX load after acid addition', (r, c) => c.cexLoad],
+    ['38', 'CEX column 1 load', (r, c) => pick(c, 'cex1', 'cex2', c.cexLoad)],
+    ['39', 'CEX column 2 load', (r, c) => pick(c, 'cex2', 'cex1', c.cexLoad)],
     ['W2', 'CEX load flow-through to drain', r => ({L: r.ww_cex_flowthrough})],
-    ['40', 'CEX column 1 eluate', (r, c) => duty(c, 0, c.cex)],
-    ['41', 'CEX column 2 eluate', (r, c) => duty(c, 1, c.cex)],
-    ['42', 'CEX eluate pool to CEX vessel SUM', (r, c) => c.cex],
-    ['43', 'CEX vessel SUM out', (r, c) => c.cex],
-    ['46', 'WFI — not modelled', null],
-    ['45', 'Virus filter pre-use flush buffer', r => ({L: r.buf_vf})],
-    ['44', 'Flush buffer + WFI', r => ({L: r.buf_vf})],
-    ['47', 'Feed to virus retentive filtration', (r, c) => c.vfIn],
-    ['48', 'Feed to virus retentive filtration', (r, c) => c.vfIn],
-    ['49', 'Virus filter A feed', (r, c) => duty(c, 0, c.vfIn)],
-    ['50', 'Virus filter B feed', (r, c) => duty(c, 1, c.vfIn)],
-    ['51', 'Virus filter A filtrate', (r, c) => duty(c, 0, c.vf)],
-    ['52', 'Virus filter B filtrate', (r, c) => duty(c, 1, c.vf)],
-    ['53', 'Virus filtrate to VRF vessel SUM', (r, c) => c.vf],
-    ['54', 'VRF vessel SUM to UF/DF', (r, c) => c.vf],
-    ['57', 'WFI — not modelled', null],
-    ['56', 'UF/DF diafiltration buffer', r => ({L: r.L_df})],
-    ['55', 'DF buffer + WFI', r => ({L: r.L_df})],
-    ['58', 'UF/DF feed (VRF pool + DF buffer)', r => ({L: r.L_vf + r.L_df, g: r.g_vf})],
-    ['W3', 'UF/DF permeate to drain', r => ({L: r.ww_sptff_permeate})],
-    ['59', 'UF/DF retentate at target concentration', r => ({L: r.L_ret, g: r.ds_g_h})],
-    ['60', 'UF/DF vessel SUM to formulation', r => ({L: r.L_ret, g: r.ds_g_h})],
-    ['61', 'Formulation buffer (excipients)', r => ({L: r.L_exc})],
-    ['62', 'Formulated drug substance to BDS hold mixer', r => ({L: r.L_ds, g: r.ds_g_h})],
-    ['63', 'Bulk drug substance to cryovault containers', r => ({L: r.L_ds, g: r.ds_g_h})],
+    ['40', 'CEX column 1 eluate', r => ({L: r.elu_cex1})],
+    ['41', 'CEX column 2 eluate', r => ({L: r.elu_cex2})],
+    ['42', 'CEX eluate pool to CEX vessel SUM', r => ({L: r.L_cex, g: r.g_cex})],
+    ['43', 'CEX vessel SUM out', (r, c) => (c.aexFirst ? {L: r.L_vf_in} : {L: r.L_aex_in, g: r.g_aex_in})],
+    ['46', 'WFI to virus filtration', r => ({L: r.wfi_vf})],
+    ['45', 'Virus filter equilibration and chase buffer', r => ({L: Math.max(0, r.buf_vf - r.wfi_vf)})],
+    ['44', 'VF buffer + WFI', r => ({L: r.buf_vf})],
+    ['47', 'Feed to virus retentive filtration', r => ({L: r.L_vf_in})],
+    ['48', 'Feed to virus retentive filtration', r => ({L: r.L_vf_in})],
+    ['49', 'Virus filter A feed', (r, c) => (busy(c, 'vrf1') ? {L: r.L_vf_in} : Z)],
+    ['50', 'Virus filter B feed', (r, c) => (busy(c, 'vrf2') ? {L: r.L_vf_in} : Z)],
+    ['51', 'Virus filter A filtrate', (r, c) => (busy(c, 'vrf1') ? {L: r.L_vf, g: r.g_vf} : Z)],
+    ['52', 'Virus filter B filtrate', (r, c) => (busy(c, 'vrf2') ? {L: r.L_vf, g: r.g_vf} : Z)],
+    ['53', 'Virus filtrate to VRF vessel SUM', r => ({L: r.L_vf, g: r.g_vf})],
+    ['54', 'VRF vessel SUM to UF/DF', r => ({L: r.L_uf_in, g: r.g_uf_in})],
+    ['57', 'WFI to UF/DF', r => ({L: r.wfi_sptff})],
+    ['56', 'UF/DF diafiltration and recovery buffers', r => ({L: Math.max(0, r.buf_sptff - r.wfi_sptff - r.L_exc)})],
+    ['55', 'UF/DF buffers + WFI', r => ({L: Math.max(0, r.buf_sptff - r.L_exc)})],
+    ['58', 'UF/DF feed (pool transfer + DF buffer)', r => ({L: r.L_uf_in + r.L_df, g: r.g_uf_in})],
+    ['W3', 'UF/DF permeate and membrane flushes to drain', r => ({L: r.ww_sptff_permeate + r.ww_ufdf_cip})],
+    ['59', 'Pool into the UF/DF vessel SUM', r => ({L: r.L_uf_in, g: r.g_uf_in})],
+    ['60', 'UF/DF vessel SUM to the BDS hold mixer', r => ({L: r.L_ret, g: r.g_ret})],
+    ['61', 'Formulation spike (sucrose, poloxamer 188)', r => ({L: r.L_exc})],
+    ['62', 'Formulated bulk to the BDS hold mixer', r => ({L: r.L_ret, g: r.g_ret})],
+    ['63', 'Bulk drug substance through 0.2 µm into cryovault containers', r => ({L: r.L_ds, g: r.ds_g_h})],
   ];
 
   // ── playback state ──
-  let S = [], P = null, ELU = 0, idx = 0, pos = 0, timer = null, clockTxt = '—';
+  let S = [], P = null, ELU = 0, idx = 0, pos = 0, timer = null, clockTxt = '—', PEAK = {};
   const ELS = {}, ROWS = {};
 
   function ctx(r0, r) {
     const aexFirst = !(P.polish && P.polish.order === 'cex_aex');
-    const vi = {L: r.L_vi, g: r.g_vi}, aex = {L: r.L_aex, g: r.g_aex}, cex = {L: r.L_cex, g: r.g_cex};
+    const lowph = !!(P.vi && P.vi.mode === 'low_ph');
+    const sk = {}; LANES.forEach(k => { sk[k] = r0['sk_' + k] || ''; });
     const cs = r.sump_L > 1 ? r.sump_g / r.sump_L : r.titre_harvest;
-    const cyc = Math.round(r.cycles);
-    return {
-      P, aexFirst, vi, aex, cex, cs, elu: ELU,
-      aexIn: aexFirst ? vi : cex, cexIn: aexFirst ? aex : vi, vfIn: aexFirst ? cex : aex,
-      vf: {L: r.L_vf, g: r.g_vf},
-      feed: {L: r.Fload_Lh + r.buf_capture, g: r.Fload_Lh * cs},
-      duty: Math.floor(Math.max(r.n_day, 0) * 24 / Math.max(num(P.lot_window_h) || 24, 1)) % 2,
-      loadA: cyc % 2 === 0, elutA: cyc % 2 === 1,
+    const load = {L: r.Fload_Lh + r.det_Lh, g: r.Fload_Lh * cs};
+    const c = {
+      P, aexFirst, lowph, sk, cs,
+      aex: {L: r.L_aex, g: r.g_aex},
+      aexLoad: {L: r.L_aex_in + r.L_base, g: r.g_aex_in},
+      cexLoad: {L: r.L_cex_in + r.L_acid, g: r.g_cex_in},
+      feed: {L: load.L + r.buf_capture, g: load.g},
       inoc: !!(P.n1 && P.n1.enabled) && r0.phase === 1 && Math.abs(r.n_day) < 1e-6,
       viy: Math.max(num(P.vi.vi_yield), 1e-9),
     };
+    c.p1In = aexFirst ? {L: r.L_aex_in, g: r.g_aex_in} : {L: r.L_cex_in, g: r.g_cex_in};
+    const nb = (sk.pa1 ? 1 : 0) + (sk.pa2 ? 1 : 0);
+    const part = (k, o) => {
+      const ld = owns(c, k, o) ? load : Z;
+      const b = nb && sk[k] ? r.buf_capture / nb : 0;
+      return {L: ld.L + b, g: ld.g};
+    };
+    c.paA = part('pa1', 'pa2');
+    c.paB = part('pa2', 'pa1');
+    return c;
   }
 
   // DOM writers for the live diagram
@@ -534,43 +550,40 @@
     const lvl = (id, f) => { E.lv[id] = Math.max(0, Math.min(1, num(f))); };
     const setVT = (id, a, b) => { E.vt[id] = [a || '', b || '']; };
     const colCls = (id, cls) => { E.col[id] = cls || ''; };
+    const stp = k => r0['st_' + k] || '';
+    const cls = k => (c.sk[k] === 'load' ? 'load' : c.sk[k] ? 'regen' : '');
     const inN = r0.phase === 1, profile = P.upstream.mode !== 'mechanistic';
     lvl('R101', inN ? 0 : 0.8);
     setVT('R101', inN ? 'transferred' : `${fmt(r.X_n1)} ×10⁶/mL`, '');
-    lvl('R102', inN ? 0.8 : 0);
+    lvl('R102', inN && r0.usp_on ? 0.8 : 0);
     if (!inN) setVT('R102', 'awaiting seed', '');
+    else if (!r0.usp_on) setVT('R102', 'run ended', 'downstream run-out');
     else if (profile) setVT('R102', `${fmt(r.titre_harvest)} g/L`, `${fmt(r.VVD)} VVD`);
     else setVT('R102', `VCD ${fmt(r.Xv)}`, `${fmt(100 * r.viability)} % viable`);
     setVT('F101', r.Fh_Lh > 0 ? `${fmt(r.Fh_Lh)} L/h permeate` : '', '');
     const sumMax = P.capture.mode === 'pcc' ? P.surge.V_max_L : P.capture.sump_max_L;
     lvl('T101', r.sump_L / Math.max(num(sumMax), 1e-9));
     setVT('T101', `${fmt(r.sump_L)} L`, `${fmt(r.sump_g)} g`);
-    const st = Math.round(r.col_state);
-    const clsA = st === 1 && c.loadA ? 'load' : st === 2 && c.elutA ? 'regen' : '';
-    const clsB = st === 1 && !c.loadA ? 'load' : st === 2 && !c.elutA ? 'regen' : '';
-    colCls('C101', clsA); colCls('C102', clsA); colCls('C103', clsB); colCls('C104', clsB);
-    setVT('CAP', `cycle ${Math.round(r.cycles)} · ` +
-      (st === 1 ? 'loading' : st === 2 ? 'eluting / regenerating' : 'waiting for a full load'), '');
+    colCls('C101', cls('pa1')); colCls('C102', cls('pa1'));
+    colCls('C103', cls('pa2')); colCls('C104', cls('pa2'));
+    setVT('CAP', `1&2: ${stp('pa1') || 'idle'}`, `3&4: ${stp('pa2') || 'idle'} · cycle ${Math.round(r.cycles)}`);
     lvl('T102', r.eluate_surge_L / Math.max(num(P.vi.eluate_surge_max_L), 1e-9));
-    setVT('T102', `${fmt(r.eluate_surge_L)} L`, r0.vi_pH !== null && r0.vi_pH !== undefined ? `pH ${num(r0.vi_pH).toFixed(2)}` : '');
-    setVT('FH', 'not modelled', '(no loss)');
-    const pass = (id, s) => {
-      const on = s && s.L > 1e-6;
-      lvl(id, on ? 0.12 : 0);
-      setVT(id, on ? `${fmt(s.L)} L/h` : 'idle', on && s.g ? `${fmt(s.g)} g/h` : '');
+    setVT('T102', `${fmt(r.eluate_surge_L)} L`, r0.vi_pH !== null && r0.vi_pH !== undefined
+      ? `pH ${num(r0.vi_pH).toFixed(2)}` : (r.det_Lh > 0 ? 'Brij-9 dosing' : ''));
+    setVT('FH', stp('depth') || 'idle', r.L_vi > 1e-6 ? `${fmt(r.L_vi)} L/h` : '');
+    const tank = (id, key, label) => {
+      lvl(id, num(r[key]) / Math.max(PEAK[key] || 0, 1e-9));
+      setVT(id, `${fmt(r[key])} L`, label || '');
     };
-    pass('T103', c.vi); pass('T201', c.aex); pass('T202', c.cex); pass('T301', c.vf); pass('T302', v['59']);
-    const aOn = c.aexIn.L > 1e-6, cOn = c.cexIn.L > 1e-6;
-    colCls('C201', aOn && c.duty === 0 ? 'load' : ''); colCls('C202', aOn && c.duty === 1 ? 'load' : '');
-    colCls('C203', cOn && c.duty === 0 ? 'load' : ''); colCls('C204', cOn && c.duty === 1 ? 'load' : '');
-    setVT('AEX', `col. ${c.duty + 1} on duty` + (aOn ? ` · ${fmt(c.aexIn.g)} g/h` : ''), '');
-    setVT('CEX', `col. ${c.duty + 1} on duty` + (cOn ? ` · ${fmt(c.cexIn.g)} g/h` : ''), '');
-    setVT('VRF', `filter ${c.duty ? 'B' : 'A'} on duty` + (c.vfIn.L > 1e-6 ? ` · ${fmt(c.vfIn.L)} L/h` : ''), '');
-    setVT('UF', v['59'] && v['59'].L > 1e-6 ? `${fmt(v['59'].L)} L/h retentate` : '', '');
-    const lotH = Math.max(num(P.lot_window_h) || 24, 1);
-    lvl('M301', inN && r.ds_g_cum > 0 ? ((Math.max(r.n_day, 0) * 24) % lotH) / lotH : 0);
-    setVT('M301', r.ds_g_h > 0 ? `${fmt(r.ds_g_h)} g/h` : '', '');
-    setVT('CV', `DS ${fmt(r.ds_g_cum / 1000)} kg`, '');
+    tank('T103', 'dfs_L'); tank('T201', 'aexv_L'); tank('T202', 'cexv_L'); tank('T301', 'vrfv_L');
+    tank('T302', 'ufdf_L', stp('ufdf')); tank('M301', 'bdsm_L', stp('bds'));
+    colCls('C201', cls('aex1')); colCls('C202', cls('aex2'));
+    colCls('C203', cls('cex1')); colCls('C204', cls('cex2'));
+    setVT('AEX', `1: ${stp('aex1') || 'idle'}`, `2: ${stp('aex2') || 'idle'}`);
+    setVT('CEX', `1: ${stp('cex1') || 'idle'}`, `2: ${stp('cex2') || 'idle'}`);
+    setVT('VRF', `A: ${stp('vrf1') || 'idle'}`, `B: ${stp('vrf2') || 'idle'}`);
+    setVT('UF', stp('ufdf') || 'idle', r.L_df > 1e-6 ? `${fmt(r.L_df)} L/h DF buffer` : '');
+    setVT('CV', `DS ${fmt(r.ds_g_cum / 1000)} kg`, r.L_ds > 1e-6 ? 'filling' : '');
   }
 
   function lastFc(i) {
@@ -672,11 +685,13 @@
     const e = $('pfdNote');
     if (!e) return;
     const legacy = P.polish && P.polish.order === 'cex_aex';
-    e.innerHTML = (legacy ? '<b>Note:</b> polish.order = cex_aex, so the simulator runs CEX before AEX; ' +
-      'each unit still shows its own values, but the drawn order differs. ' : '') +
-      'Grey dashed items are on the site flowsheet but not in the simulator (detergent, separate WFI, depth filtration, ' +
-      'on-line acid/base, holds in the intermediate SUMs). Protein A pairs alternate each cycle and AEX/CEX/virus-filter ' +
-      'duty swaps each lot; the model itself runs one column train.' +
+    const lowph = P.vi && P.vi.mode === 'low_ph';
+    e.innerHTML = (legacy ? '<b>Note:</b> polish.order = cex_aex, so CEX runs before AEX; the drawn order differs. ' : '') +
+      (lowph ? '<b>Note:</b> vi.mode = low_ph: a low-pH hold runs between the Protein A vessel and depth filtration ' +
+               '(not on the Case 5 flowsheet); no Brij-9 is dosed. ' : '') +
+      'Every unit runs its steps in sequence; the label under each column, filter and UF/DF shows the step at the end ' +
+      'of the hour (teal = loading, yellow = other steps). Stream values are hourly totals; WFI, Brij-9 and the on-line ' +
+      'acid/base additions are modelled. Vessel shading = level relative to the run peak.' +
       (P.upstream.mode === 'mechanistic' ? ' Legacy ATF mode: U5 is the cell bleed.' : '');
   }
 
@@ -718,6 +733,10 @@
     const cp = P.capture, pc = P.pcc;
     ELU = cp.mode === 'pcc' ? num(pc.eluate_CV) * num(pc.CV_L)
                             : num(cp.eluate_CV) * num(cp.column_capacity_g) / Math.max(num(cp.DBC_gL), 1e-9);
+    PEAK = {};
+    ['dfs_L', 'aexv_L', 'cexv_L', 'vrfv_L', 'ufdf_L', 'bdsm_L'].forEach(k => {
+      PEAK[k] = S.reduce((m, r) => Math.max(m, num(r[k])), 0);
+    });
     const sl = $('pfdSlider'); if (sl) sl.max = Math.max(0, S.length - 1);
     note();
     pos = 0;
