@@ -1,0 +1,12 @@
+{
+  "trained": true,
+  "feature_version": 3,
+  "windows": 312,
+  "epochs": 30,
+  "final_loss": 1.41529,
+  "seq_len_h": 48,
+  "horizon_h": 24,
+  "hidden": 32,
+  "last_trained": "2026-10-18T11:25:19Z",
+  "scale": 110.67618600434646
+}
