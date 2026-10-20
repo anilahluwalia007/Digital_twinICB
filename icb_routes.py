@@ -3,14 +3,21 @@ icb_routes.py — Flask routes for the IDB digital twin
 NavNevAI_mAbWasteWater · CarbonTesseract 2026
 
   GET  /api/icb/defaults        default parameters, design check, titre curves
+  GET  /api/icb/cases           the five basis-of-design cases and their default settings
+  POST /api/icb/cases/preview   noise-free plan for every case {"params", "case": {"settings", "values"}}
+  POST /api/icb/cases/compare   simulate all five cases, design envelope (Cases 1–3), Case 5 vs Case 1
   POST /api/icb/design          design check for {"params": {...}}
-  POST /api/icb/portfolio       buffer / sump sizing across all molecules
-  POST /api/icb/sizing          equipment sizing, worst case across all molecules
-  POST /api/icb/simulate        dynamic run {"params", "seed", "downsample_h", "use_forecaster"}
+  POST /api/icb/portfolio       buffer / sump sizing across all titre curves
+  POST /api/icb/sizing          equipment sizing, worst case across all titre curves
+  POST /api/icb/simulate        dynamic run {"params", "seed", "downsample_h", "use_forecaster",
+                                "case": {"id", "settings", "values"} | null}
   POST /api/icb/forecast        run, then NevAI 24 h bands for titre and wastewater
   GET  /api/icb/nevai/status    model state, weights on disk, training state, why_off
   POST /api/icb/nevai/train     start background training (returns immediately)
   POST /api/icb/nevai/ingest    hourly plant rows -> fine-tune both forecasters
+
+A case is applied on top of the posted parameters (icb_cases.apply_case); the run returns
+result["case"] = {"info": what the case changed, "annual": per-year totals, occupancy and checks}.
 
 Training runs in a background thread. A lock file stops several gunicorn
 workers from training at once; a lock left by a worker that died is ignored.
@@ -19,6 +26,7 @@ while a retraining runs. When NevAI is not used, the response says why
 (forecaster_reason). With AUTO_TRAIN=1 (default) training starts automatically
 when no current-version model exists.
 """
+import copy
 import os
 import socket
 import threading
@@ -28,6 +36,7 @@ from icb_process import (ICBParams, WASTE_STREAMS, BUFFER_OPS, TITRE_PROFILES,
                          process_design, portfolio_sizing)
 from icb_dynamic import ICBSimulator
 from icb_sizing import size_portfolio
+from icb_cases import (apply_case, annual, case_api_info, preview_cases, compare_cases, rebase_suggestions)
 import icb_nevai
 
 _TRAIN = {"running": False, "started": None, "finished": None, "last": None, "error": None}
@@ -156,6 +165,13 @@ def register_icb_routes(app, login_required=None):
         p.run_days = max(3.0, min(float(p.run_days), 120.0))
         return p
 
+    def _case_params(body):
+        """Inputs + the selected case (if any): (case-applied params, Inputs params, case info)."""
+        p = _params(body)
+        base = copy.deepcopy(p)
+        info = apply_case(p, body.get("case"))
+        return p, base, info
+
     @app.route("/api/icb/defaults", methods=["GET"])
     @_guard
     def icb_defaults():
@@ -167,11 +183,38 @@ def register_icb_routes(app, login_required=None):
                         "waste_streams": {k: {"area": a, "route": r, "driver": dr, "desc": d}
                                           for k, (a, r, dr, d) in WASTE_STREAMS.items()}})
 
+    @app.route("/api/icb/cases", methods=["GET"])
+    @_guard
+    def icb_cases():
+        return jsonify({"ok": True, **case_api_info()})
+
+    @app.route("/api/icb/cases/preview", methods=["POST"])
+    @_guard
+    def icb_cases_preview():
+        try:
+            body = request.get_json(force=True) or {}
+            return jsonify({"ok": True, **preview_cases(_params(body), body.get("case"))})
+        except Exception as e:
+            app.logger.exception("icb case preview error")
+            return jsonify({"ok": False, "error": str(e)}), 400
+
+    @app.route("/api/icb/cases/compare", methods=["POST"])
+    @_guard
+    def icb_cases_compare():
+        try:
+            body = request.get_json(force=True) or {}
+            return jsonify(compare_cases(_params(body), body.get("case"), int(body.get("seed", 0)),
+                                         body.get("ids")))
+        except Exception as e:
+            app.logger.exception("icb case compare error")
+            return jsonify({"ok": False, "error": str(e)}), 400
+
     @app.route("/api/icb/design", methods=["POST"])
     @_guard
     def icb_design():
         body = request.get_json(force=True) or {}
-        return jsonify({"ok": True, "design": process_design(_params(body))})
+        p, _, _ = _case_params(body)
+        return jsonify({"ok": True, "design": process_design(p)})
 
     @app.route("/api/icb/portfolio", methods=["POST"])
     @_guard
@@ -198,12 +241,16 @@ def register_icb_routes(app, login_required=None):
     def icb_simulate():
         try:
             body = request.get_json(force=True) or {}
+            p, base, info = _case_params(body)
             fc, why = _forecaster_or_reason(bool(body.get("use_forecaster", True)))
-            res = ICBSimulator(_params(body), forecaster=fc, seed=int(body.get("seed", 0))).run(
+            res = ICBSimulator(p, forecaster=fc, seed=int(body.get("seed", 0))).run(
                 downsample_h=int(body.get("downsample_h", 1)))
             res["forecaster_used"] = fc is not None
             if fc is None:
                 res["forecaster_reason"] = why
+            res["case"] = {"info": info, "annual": annual(p, res, info)}
+            if info:
+                rebase_suggestions((res.get("sizing") or {}).get("suggested_params"), base, p)
             return jsonify(res)
         except Exception as e:
             app.logger.exception("icb simulate error")
@@ -217,7 +264,8 @@ def register_icb_routes(app, login_required=None):
             fs, why = _forecaster_or_reason(True)
             if fs is None:
                 return jsonify({"ok": False, "error": "NevAI not available: " + why}), 400
-            res = ICBSimulator(_params(body), forecaster=fs, seed=int(body.get("seed", 0))).run(keep_history=True)
+            p, _, _ = _case_params(body)
+            res = ICBSimulator(p, forecaster=fs, seed=int(body.get("seed", 0))).run(keep_history=True)
             hist = res.pop("_history")
             n = int(body.get("n_samples", 30))
             return jsonify({
