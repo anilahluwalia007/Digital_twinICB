@@ -89,13 +89,13 @@ class ICBSimulator:
         batch = cp.mode != "pcc"
         lowph = vi.mode == "low_ph"
         V = br.V_L
-        H1 = int(round(n1.days * 24)) if n1.enabled else 0
+        design = process_design(p)
+        n1s = design["n1"]
+        H1 = int(n1s.get("hours", 0))          # N-1 duration: target seed VCD or fixed days
         HN = int(round(p.run_days * 24))
         HT = int(round(max(p.dsp.tail_h, 0.0)))
         H = H1 + HN + HT
         n_sub, dt = 4, 0.25
-        design = process_design(p)
-        n1s = design["n1"]
         cyc = capture_cycle(p)
         per_g = buffer_L_per_g(p)
         dose = det_frac(p)
@@ -171,6 +171,7 @@ class ICBSimulator:
                 event(h, "resin_life", "Protein A resin reached its cycle limit; plan replacement")
 
         for h in range(H):
+            led.day = h // 24
             t_day = h / 24.0
             in_n = h >= H1
             n_h = h - H1
@@ -197,7 +198,8 @@ class ICBSimulator:
             else:
                 if n_h == 0:
                     event(h, "inoculate", f"N inoculated at {n1s['n_seed_vcd']:.2f} ×10⁶ cells/mL"
-                          + (f" from N-1 at {X1:.1f} ×10⁶/mL" if n1.enabled else ""))
+                          + (f" from N-1 at {X1:.1f} ×10⁶/mL after {n1s['days']} d ({n1s['reason']})"
+                             if n1.enabled else ""))
                 if n_h == HN and HT > 0:
                     event(h, "run_out", "N run ended; downstream runs out the remaining product")
                 if usp_on:
@@ -583,6 +585,7 @@ class ICBSimulator:
             "overall_yield_pct": round(100 * ds_g / produced_g, 1) if produced_g > 0 else 0.0,
             "volumetric_productivity_g_L_day": round(ds_g / V / p.run_days, 3),
             "n1_seed_vcd": st["n1s"]["n_seed_vcd"],
+            "n1_days": st["n1s"].get("days"),
             "n1_waste_m3": round(ww_sum["n1_permeate"] / 1000, 3),
             "media_used_m3": round(media_L / 1000, 2),
             "media_m3_per_kg_ds": round(media_L / ds_g, 2) if ds_g > 0 else None,
@@ -644,6 +647,11 @@ class ICBSimulator:
             "series": [{k: _rnd(r.get(k)) for k in SERIES_KEYS} for r in history[::step]],
             "events": st["events"][:300],
         }
+        from icb_sizing import size_equipment            # here to avoid a circular import
+        try:
+            out["sizing"] = size_equipment(p, out, history, led.sol_day)
+        except Exception as e:                            # sizing must never break a run
+            out["sizing"] = {"error": f"sizing failed: {e}"}
         if keep_history:
             out["_history"] = history
         return out
@@ -661,3 +669,8 @@ if __name__ == "__main__":
     for s in res["solutions"]:
         print(f"  {s['L']:>10.1f}  {s['label']}")
     print(f"Steps logged: {len(res['steps'])}")
+    print("Sizing:")
+    for g in res["sizing"].get("groups", []):
+        print(" ", g["name"])
+        for r in g["rows"]:
+            print(f"    {r['tag']:<11} {r['item']:<48} need {r['required']} {r['unit']}  ->  {r['recommended']}")

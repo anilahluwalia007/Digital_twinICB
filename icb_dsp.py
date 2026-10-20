@@ -82,12 +82,16 @@ class Ledger:
         self.ww = {}
         self.wfi_h = dict.fromkeys(BUFFER_OPS, 0.0)
         self.steps = []
+        self.day = 0                  # campaign day, set by the simulator each hour
+        self.sol_day = {}             # {day: {solution: L}} for tote sizing
 
     def use(self, sol, L, op):
         if not sol or L <= 0.0:
             return
+        day = self.sol_day.setdefault(self.day, {})
         for k, f in DILUTIONS.get(sol, ((sol, 1.0),)):
             self.sol[k] = self.sol.get(k, 0.0) + L * f
+            day[k] = day.get(k, 0.0) + L * f
             if k == "wfi":
                 self.wfi_h[op] = self.wfi_h.get(op, 0.0) + L * f
         self.buf[op] = self.buf.get(op, 0.0) + L

@@ -5,6 +5,7 @@ NavNevAI_mAbWasteWater · CarbonTesseract 2026
   GET  /api/icb/defaults        default parameters, design check, titre curves
   POST /api/icb/design          design check for {"params": {...}}
   POST /api/icb/portfolio       buffer / sump sizing across all molecules
+  POST /api/icb/sizing          equipment sizing, worst case across all molecules
   POST /api/icb/simulate        dynamic run {"params", "seed", "downsample_h", "use_forecaster"}
   POST /api/icb/forecast        run, then NevAI 24 h bands for titre and wastewater
   GET  /api/icb/nevai/status    model state, weights on disk, training state, why_off
@@ -26,6 +27,7 @@ from flask import jsonify, request
 from icb_process import (ICBParams, WASTE_STREAMS, BUFFER_OPS, TITRE_PROFILES,
                          process_design, portfolio_sizing)
 from icb_dynamic import ICBSimulator
+from icb_sizing import size_portfolio
 import icb_nevai
 
 _TRAIN = {"running": False, "started": None, "finished": None, "last": None, "error": None}
@@ -179,6 +181,16 @@ def register_icb_routes(app, login_required=None):
             return jsonify({"ok": True, **portfolio_sizing(_params(body))})
         except Exception as e:
             app.logger.exception("icb portfolio error")
+            return jsonify({"ok": False, "error": str(e)}), 400
+
+    @app.route("/api/icb/sizing", methods=["POST"])
+    @_guard
+    def icb_sizing():
+        try:
+            body = request.get_json(force=True) or {}
+            return jsonify({"ok": True, **size_portfolio(_params(body), int(body.get("seed", 0)))})
+        except Exception as e:
+            app.logger.exception("icb sizing error")
             return jsonify({"ok": False, "error": str(e)}), 400
 
     @app.route("/api/icb/simulate", methods=["POST"])

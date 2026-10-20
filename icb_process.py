@@ -149,7 +149,9 @@ class N1Params:
     enabled: bool = True
     V_L: float = 15.0
     VVD: float = 2.0
-    days: float = 5.0
+    days: float = 5.0                # fixed N-1 duration (used only when target_seed_vcd = 0)
+    target_seed_vcd: float = 2.0     # inoculate N when the transfer gives this VCD (1e6/mL); 0 = fixed days
+    max_days: float = 8.0            # transfer anyway after this long if the target is not reached
     X0: float = 0.5
     mu_h: float = 0.025
     X_max: float = 40.0
@@ -413,6 +415,29 @@ class ControlParams:
     titre_drop_alarm: float = 0.15
 
 
+@dataclass
+class SizingParams:                  # basis for icb_sizing.py: typical values, replace with site standards
+    util_target: float = 0.80        # max share of the peak day a unit (or its load pump) may be busy
+    vessel_margin: float = 1.20      # on the peak working volume
+    vessel_fill: float = 0.80        # max working fill of a vessel
+    pump_margin: float = 1.25
+    area_margin: float = 1.25        # filters and membranes (fouling)
+    min_scale: float = 0.25          # never shrink a unit below this share of its configured size
+    tote_days: float = 1.0           # supply held per tote, days of peak use
+    media_days: float = 1.0
+    pa_bed_cm: float = 20.0
+    aex_bed_cm: float = 15.0
+    cex_bed_cm: float = 20.0
+    max_u_cmh: float = 600.0         # max linear velocity
+    tff_flux_LMH: float = 20.0       # cell-removal TFF permeate flux
+    vf_flux_LMH: float = 60.0
+    vf_Lm2: float = 200.0            # virus filter throughput before change
+    ufdf_flux_LMH: float = 40.0
+    ufdf_load_gm2: float = 500.0
+    ufdf_crossflow_LMH: float = 300.0
+    filter_flux_LMH: float = 1000.0  # in-line 0.2 um filters
+
+
 def _cast(old, new):
     if isinstance(old, bool):
         return new if isinstance(new, bool) else str(new).lower() in ("1", "true", "yes", "on")
@@ -446,6 +471,7 @@ class ICBParams:
     dsp: DSPParams = field(default_factory=DSPParams)
     pat: PATParams = field(default_factory=PATParams)
     control: ControlParams = field(default_factory=ControlParams)
+    sizing: SizingParams = field(default_factory=SizingParams)
     run_days: float = 14.0
     lot_window_h: float = 24.0       # UF/DF collects this long per lot
     disturbances: list = field(default_factory=list)
@@ -590,17 +616,44 @@ def train_yield(p, cyc=None):
     return y * (p.vi.vi_yield if p.vi.mode == "low_ph" else 1.0)
 
 
-def n1_summary(p):
+def n1_plan(p):
+    """When the N-1 seed is transferred to N and the VCD it delivers."""
     n1, br = p.n1, p.bioreactor
     if not n1.enabled:
-        return {"enabled": False, "n_seed_vcd": round(br.X0, 3), "waste_L": 0.0, "media_L": 0.0}
-    hours = int(round(n1.days * 24))
-    X = min(n1.X0 * math.exp(n1.mu_h * hours), n1.X_max)
-    seed = X * min(n1.transfer_L, n1.V_L) / br.V_L
-    media = n1.VVD * n1.V_L / 24.0 * hours
-    return {"enabled": True, "days": n1.days, "V_L": n1.V_L, "VVD": n1.VVD,
-            "final_vcd": round(X, 2), "n_seed_vcd": round(seed, 3),
-            "media_L": round(media, 1), "waste_L": round(media, 1)}
+        return {"enabled": False, "hours": 0}
+    share = min(n1.transfer_L, n1.V_L) / max(br.V_L, 1e-9)
+    if n1.target_seed_vcd > 0:
+        hmax = max(0, int(round(n1.max_days * 24)))
+        need = n1.target_seed_vcd / max(share, 1e-12)        # N-1 density needed at transfer
+        if need <= n1.X0:
+            h, reason = 0, "target reached"
+        elif n1.mu_h <= 0:
+            h, reason = hmax, "N-1 does not grow (mu_h <= 0); transferred at max_days"
+        elif need > n1.X_max:
+            h = min(hmax, int(math.ceil(math.log(n1.X_max / n1.X0) / n1.mu_h - 1e-9)))
+            reason = "target needs more than the N-1 maximum density; transferred at maximum"
+        else:
+            h = int(math.ceil(math.log(need / n1.X0) / n1.mu_h - 1e-9))
+            reason = "target reached"
+            if h > hmax:
+                h, reason = hmax, "max_days reached before the target"
+    else:
+        h, reason = max(0, int(round(n1.days * 24))), "fixed N-1 duration"
+    X = min(n1.X0 * math.exp(n1.mu_h * h), n1.X_max)
+    return {"enabled": True, "hours": h, "X_end": X, "seed_vcd": X * share, "reason": reason}
+
+
+def n1_summary(p):
+    n1, br = p.n1, p.bioreactor
+    pl = n1_plan(p)
+    if not pl["enabled"]:
+        return {"enabled": False, "hours": 0, "days": 0.0, "n_seed_vcd": round(br.X0, 3),
+                "waste_L": 0.0, "media_L": 0.0, "reason": "N-1 off"}
+    media = n1.VVD * n1.V_L / 24.0 * pl["hours"]
+    return {"enabled": True, "hours": pl["hours"], "days": round(pl["hours"] / 24.0, 2),
+            "V_L": n1.V_L, "VVD": n1.VVD, "final_vcd": round(pl["X_end"], 2),
+            "n_seed_vcd": round(pl["seed_vcd"], 3), "target_seed_vcd": n1.target_seed_vcd or None,
+            "reason": pl["reason"], "media_L": round(media, 1), "waste_L": round(media, 1)}
 
 
 def _nominal_lot_g(p):
@@ -858,7 +911,10 @@ def profile_design(p):
 
 def process_design(p):
     d = steady_state_design(p) if p.upstream.mode == "mechanistic" else profile_design(p)
-    d["n1"] = n1_summary(p)
+    d["n1"] = n1 = n1_summary(p)
+    if n1.get("enabled") and n1["reason"] not in ("target reached", "fixed N-1 duration"):
+        d["notes"].append(f"N-1: {n1['reason']}. N is seeded at {n1['n_seed_vcd']} ×10⁶/mL after {n1['days']} d "
+                          f"(target {p.n1.target_seed_vcd:g}). Raise transfer_L, X_max or max_days.")
     return d
 
 

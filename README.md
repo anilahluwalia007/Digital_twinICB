@@ -19,6 +19,11 @@ per day. The twin includes:
 - wastewater by stream, route and driver (volume, mass, event)
 - NevAI (LSTM) 24 h forecasts of titre, grams, buffer and wastewater
 - portfolio sizing across all molecules (which molecule sets buffer supply, which sets the sump)
+- N-1 seed transferred when it gives the N reactor a target VCD (`n1.target_seed_vcd`, default
+  2.0 ×10⁶/mL, about 5.2 d); set it to 0 for the old fixed `n1.days`
+- equipment sizing for every unit (bioreactors, TFF, columns, vessels, filters, membranes, pumps,
+  totes, WFI, effluent), for one run or the worst case across all molecules, with a button that
+  writes the sized values back into the parameters and re-runs
 - a live process flow diagram that follows the site flowsheet (streams 1–63) and
   plays the last run hour by hour, with a stream table and SVG download
 - a start-up film and a step-sequence film, both recordable as MP4 / WebM
@@ -116,7 +121,7 @@ Create an empty repository on github.com (no README, no .gitignore), for example
 
 Check the repository shows `app.py`, `render.yaml`, `requirements.txt`,
 `templates/index.html`, `static/chart.umd.js`, `static/pfd.js`, `static/pfdvideo.js`,
-`static/seqfilm.js`, `icb_dsp.py` and `data/icb/`
+`static/seqfilm.js`, `icb_dsp.py`, `icb_sizing.py` and `data/icb/`
 with four files. `index.html` must be in `templates/` (not `static/`): that is
 where `app.py` loads it from.
 
@@ -169,6 +174,7 @@ Notes:
     GET  /api/icb/defaults        default parameters, design check, titre curves
     POST /api/icb/design          design check for {"params": {...}}
     POST /api/icb/portfolio       buffer / sump sizing across all molecules
+    POST /api/icb/sizing          equipment sizing, worst case across all molecules
     POST /api/icb/simulate        dynamic run {"params", "seed", "downsample_h", "use_forecaster"}
     POST /api/icb/forecast        run, then NevAI 24 h bands for titre and wastewater
     GET  /api/icb/nevai/status    model state + background training state
@@ -180,6 +186,7 @@ Notes:
 - `icb_process.py` — parameters, titre curves, solutions (with compositions), waste streams,
   design check, portfolio sizing
 - `icb_dsp.py` — step-by-step downstream (Case 5 flowsheet): every unit as a recipe of steps
+- `icb_sizing.py` — equipment sizing from the hourly run (basis in the `sizing` parameter section)
 - `icb_dynamic.py` — hour-by-hour simulation: N-1, N + TFF, surge tank, downstream, run-out;
   also records per-stream values and the step log for the diagram and films
 - `icb_nevai.py` — NevAI titre and wastewater forecasters (hourly, 24 h ahead)
