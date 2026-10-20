@@ -9,7 +9,7 @@
 <script src="/static/pfdvideo.js"></script>   <!-- dynamic start-up film (MP4 / WebM) -->
 <script src="/static/seqfilm.js"></script>    <!-- step-sequence film (MP4 / WebM) -->
 <style>
-:root{--bg:#f4f6f9;--card:#fff;--bd:#e3e7ee;--t1:#16202c;--t2:#5b6675;--ac:#0e7c7b;--er:#b42318}
+:root{--bg:#f4f6f9;--card:#fff;--bd:#e3e7ee;--t1:#16202c;--t2:#5b6675;--ac:#0e7c7b;--er:#b42318;--lk:#f59e0b}
 *{box-sizing:border-box}
 body{margin:0;font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--t1)}
 header{padding:18px 22px 4px;max-width:1400px;margin:0 auto}
@@ -28,11 +28,11 @@ button:disabled{opacity:.5;cursor:wait}
 input[type=number],input[type=text],select{padding:4px 6px;border:1px solid var(--bd);border-radius:6px;font-size:12px;background:#fff}
 input[type=number],input[type=text]{width:96px}
 .card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:12px 14px;margin:10px 0}
-summary{cursor:pointer;font-weight:600}
 .pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px;margin-top:10px}
 fieldset{border:1px solid var(--bd);border-radius:8px;padding:8px 10px}
 legend{font-weight:600;color:var(--ac);padding:0 4px}
-fieldset label{display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:11.5px;color:var(--t2);margin:3px 0}
+fieldset label{display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:11.5px;color:var(--t2);margin:3px 0;padding-left:4px;border-left:3px solid transparent}
+fieldset label.locked{border-left-color:var(--lk);background:#fffbeb}
 .dist{display:block;margin-top:10px;font-weight:600}
 textarea{width:100%;font-family:ui-monospace,Menlo,monospace;font-size:12px;border:1px solid var(--bd);border-radius:6px;padding:6px;margin-top:4px}
 .kpis{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px;margin:10px 0}
@@ -43,23 +43,27 @@ textarea{width:100%;font-family:ui-monospace,Menlo,monospace;font-size:12px;bord
 .chart{height:260px;position:relative}
 .chart img.pimg{display:none;width:100%;height:100%;object-fit:contain}
 h3{font-size:13px;margin:0 0 8px}
+h4{font-size:12px;margin:12px 0 6px;color:var(--ac)}
 table{width:100%;border-collapse:collapse;font-size:12px}
 td,th{padding:4px 6px;border-bottom:1px solid var(--bd);text-align:left;vertical-align:top}
 .scroll{overflow-x:auto}
 .scroll th,.scroll td{white-space:nowrap}
 .muted{color:var(--t2)}
 .err{color:var(--er);font-weight:600}
+.ok{color:#15803d;font-weight:600}
+.bad{color:var(--er);font-weight:600}
 .note{margin:3px 0}
+.small{font-size:11px}
 .fcnote{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;border-radius:8px;padding:6px 8px;font-size:11.5px;margin-bottom:6px}
 .pfdbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
 .pfdbar input[type=range]{flex:1;min-width:180px;accent-color:var(--ac)}
 #pfdBox{overflow-x:auto;border:1px solid var(--bd);border-radius:8px;background:#fff}
 #pfdBox svg{display:block;width:100%;min-width:900px;height:auto}
 #pfdNote{font-size:11.5px;margin-top:6px}
-.tblwrap{max-height:340px;overflow:auto;margin-top:8px}
+.tblwrap{max-height:420px;overflow:auto;margin-top:8px}
 #pfdTable td:nth-child(n+3),#pfdTable th:nth-child(n+3){text-align:right;white-space:nowrap}
 #pfdTable tr.on td{background:#e6f5f3}
-#pfdTable thead th{position:sticky;top:0;background:#fff}
+.tblwrap thead th{position:sticky;top:0;background:#fff}
 #vidCanvas,#seqCanvas{display:block;width:100%;height:auto;aspect-ratio:16/9;border-radius:12px;background:#e9edf3;margin-top:4px}
 #vidOut video,#seqOut video{display:block;width:100%;max-height:440px;margin-top:10px;border-radius:12px;background:#000}
 .vidlinks{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px}
@@ -68,22 +72,47 @@ td,th{padding:4px 6px;border-bottom:1px solid var(--bd);text-align:left;vertical
 .num{text-align:right;white-space:nowrap}
 .print-only{display:none}
 #printHead h2{font-size:18px;margin:0 0 2px}
+.sz td.b{white-space:normal;min-width:300px}
+tr.flag td{background:#fff7ed}
+tr.up td{background:#fef3c7}
 .ptab{columns:3;column-gap:18px}
 .ptab table{break-inside:avoid;margin-bottom:8px;font-size:9.5px}
 .ptab th{background:#f1f5f9}
+/* case selection and tabs */
+.casebar{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+.casebar button{background:#fff;color:var(--t1);border:1px solid var(--bd);text-align:left;padding:7px 12px;line-height:1.25;min-width:132px}
+.casebar button small{display:block;font-weight:500;color:var(--t2);font-size:11px}
+.casebar button.on{background:var(--ac);color:#fff;border-color:var(--ac)}
+.casebar button.on small{color:#d7f3f0}
+.casebar button.env{border-style:dashed;border-color:var(--ac)}
+.banner{background:#e6f5f3;border:1px solid #b9e4df;border-radius:10px;padding:8px 12px;font-size:12.5px}
+.tabs{display:flex;gap:2px;border-bottom:2px solid var(--bd);margin-top:12px;flex-wrap:wrap;position:sticky;top:0;background:var(--bg);z-index:5;padding-top:4px}
+.tabs button{background:transparent;color:var(--t2);border-radius:8px 8px 0 0;padding:9px 16px;margin-bottom:-2px;border-bottom:2px solid transparent}
+.tabs button.on{color:var(--ac);border-bottom-color:var(--ac);background:#fff}
+.panel{display:none}
+.panel.on,.printall .panel{display:block}
+.ctab input{width:80px}
+.ctab tr.on td{background:#e6f5f3}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:10px}
+.ccard{border:1px solid var(--bd);border-radius:10px;padding:10px 12px;background:#fff}
+.ccard.on{border-color:var(--ac);box-shadow:0 0 0 2px #ccefeb}
+.ccard table{font-size:11.5px;margin:6px 0}
+.ccard td{padding:2px 4px}
+.settings{display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+.settings label{font-size:12px;color:var(--t2)}
 @media print{
   @page{size:A4 landscape;margin:10mm}
   body{background:#fff;font-size:10.5px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   header,main{max-width:none;padding:0}
-  .no-print,.bar,#paramPanel,.who,.pfdbar,#pfdTableWrap summary{display:none!important}
+  .no-print,.bar,.casebar,.tabs,.who,.pfdbar{display:none!important}
+  .panel{display:block!important}
+  #tab-inputs{display:none!important}
   .print-only{display:block}
   .card{border:1px solid #cbd5e1;break-inside:avoid;margin:6px 0;padding:8px 10px}
-  #pfdCard{break-after:page}
+  #pfdCard{break-before:page;break-after:page}
   #pfdBox{overflow:visible;border:0}
   #pfdBox svg{min-width:0;max-height:170mm}
-  #pfdTableWrap{break-before:page}
   .tblwrap{max-height:none;overflow:visible}
-  #pfdTable{font-size:9px}
   .kpis{grid-template-columns:repeat(6,1fr);gap:6px}
   .kpi{padding:6px 8px}.kpi .v{font-size:14px}
   .grid{grid-template-columns:1fr 1fr}
@@ -93,6 +122,7 @@ td,th{padding:4px 6px;border-bottom:1px solid var(--bd);text-align:left;vertical
   .scroll{overflow:visible}
   .scroll th,.scroll td{white-space:normal}
   table{font-size:9.5px}
+  .ctab input{border:0;width:auto;padding:0}
   #printParams{break-before:page}
 }
 </style>
@@ -100,159 +130,260 @@ td,th{padding:4px 6px;border-bottom:1px solid var(--bd);text-align:left;vertical
 <body>
 <header>
   <div class="top">
-    <h1>Integrated Dynamic BioProcessing (IDB) — mAb digital twin</h1>
+    <div>
+      <h1>Integrated Dynamic BioProcessing (IDB) — mAb digital twin</h1>
+      <p>N-1 perfusion seed → N reactor → TFF cell removal → surge tank → Brij-9 in-line → Protein A (columns 1&amp;2, 3&amp;4)
+         → depth filtration → Tris base/NaCl in-line → AEX → acetic acid in-line → CEX → virus filtration → UF/DF
+         → BDS hold → 0.2 µm → cryovault. Pick a basis-of-design case, then use the tabs.</p>
+    </div>
     <div class="who" id="who" hidden>
       <span id="whoName"></span>
       <form method="post" action="/logout"><button type="submit" class="ghost">Log out</button></form>
     </div>
   </div>
-  <p>N-1 perfusion seed → N reactor → TFF cell removal → surge tank → Brij-9 in-line → Protein A (columns 1&amp;2, 3&amp;4)
-     → depth filtration → Tris base/NaCl in-line → AEX → acetic acid in-line → CEX → virus filtration → UF/DF
-     → BDS hold → 0.2 µm → cryovault. Every step of every unit runs in sequence; solutions are tracked by name.
-     Day axis = campaign day (N-1 first, then N, then the downstream run-out).</p>
   <div id="printHead" class="print-only"></div>
 </header>
 <main>
   <div class="bar">
-    <button id="runBtn">Run simulation</button>
-    <label>Molecule <select id="molecule"></select></label>
-    <label>Upstream <select id="upMode">
-      <option value="profile">IDB: titre curve</option>
-      <option value="mechanistic">Legacy ATF perfusion model</option></select></label>
-    <label>Capture <select id="capMode">
-      <option value="batch">Case 5 Protein A (2 trains, all steps)</option>
-      <option value="pcc">3-column PCC (lumped steps)</option></select></label>
-    <label><input type="checkbox" id="useFc" checked> NevAI forecasts</label>
+    <button id="runBtn">Run selected case</button>
     <label>Seed <input id="seed" type="number" value="1"></label>
+    <label><input type="checkbox" id="useFc" checked> NevAI forecasts</label>
     <button id="trainBtn" class="ghost">Train NevAI</button>
-    <button id="printBtn" class="ghost" title="Landscape report: diagram at the chosen hour, KPIs, charts, tables and all parameters">Print / Save as PDF</button>
+    <button id="printBtn" class="ghost" title="Landscape report: every tab except Inputs, plus all parameters">Print / Save as PDF</button>
     <span id="aiState" class="muted"></span>
     <span id="status" class="muted"></span>
   </div>
 
-  <details class="card" id="paramPanel">
-    <summary>Parameters (defaults are illustrative — replace with site data)</summary>
-    <div id="paramForm"></div>
-    <label class="dist">Disturbances (JSON list; day = N day)
-      <textarea id="dist" rows="2">[]</textarea>
-    </label>
-    <div class="muted">Types: qp_step (factor; scales the titre curve in IDB mode), feed_glucose_step (factor) and vcd_sensor_bias (bias) for the legacy model. Example: [{"type": "qp_step", "day": 10, "factor": 0.85}]</div>
-    <label class="dist">Custom titre curve (JSON [[N day, g/L], …]; pick "Custom curve" as the molecule)
-      <textarea id="customPts" rows="2">[]</textarea>
-    </label>
-  </details>
+  <nav class="casebar" id="caseBar" aria-label="Case selection"></nav>
+  <div id="banner" class="banner">Loading cases…</div>
 
-  <div id="kpis" class="kpis"></div>
+  <nav class="tabs" id="tabs" aria-label="Sections">
+    <button data-tab="cases">Cases</button>
+    <button data-tab="inputs">Inputs</button>
+    <button data-tab="hmb">HMB</button>
+    <button data-tab="design">Design</button>
+    <button data-tab="outputs">Outputs</button>
+    <button data-tab="diagrams">Schematics &amp; diagrams</button>
+  </nav>
 
-  <div class="card" id="pfdCard">
-    <h3>Process flow diagram — live playback of the last run (every step shown on its unit)</h3>
-    <div class="pfdbar">
-      <button id="pfdPlay" type="button">▶ Play</button>
-      <input id="pfdSlider" type="range" min="0" max="0" value="0" step="1" aria-label="Simulation hour">
-      <label>Speed <select id="pfdSpeed">
-        <option value="2">2 h/s</option><option value="6" selected>6 h/s</option>
-        <option value="12">12 h/s</option><option value="24">1 day/s</option><option value="72">3 days/s</option>
-      </select></label>
-      <span id="pfdClock" class="muted">—</span>
-      <button id="pfdSvg" type="button" class="ghost">Download SVG</button>
+  <!-- ═══════════════ CASES ═══════════════ -->
+  <section class="panel" id="tab-cases">
+    <div class="card">
+      <h3>Basis-of-design cases</h3>
+      <div class="scroll"><table id="caseTable" class="ctab"></table></div>
+      <div class="pfdbar no-print" style="margin-top:8px">
+        <button id="caseReset" class="ghost" type="button">Reset to the case table</button>
+        <span class="muted">Edit any cell; blank = not given. Blank yield and load: Cases 2 and 5 inherit Case 1, Case 4 keeps the Inputs values.</span>
+      </div>
+      <div id="casePurpose" class="small"></div>
     </div>
-    <div id="pfdBox"></div>
-    <div id="pfdNote" class="muted"></div>
-    <details id="pfdTableWrap" open>
-      <summary>Stream table (values at the hour shown)</summary>
+
+    <div class="card no-print">
+      <h3>How a case is applied to a run</h3>
+      <div class="settings">
+        <label>Avg titre basis <select id="csBasis">
+          <option value="productivity">g/L/day = g made per L N volume per day (titre × VVD)</option>
+          <option value="titre">mean permeate titre (g/L)</option></select></label>
+        <label>Titre curve shape <select id="csShape"></select></label>
+        <label><input type="checkbox" id="csLockT"> Scale titre to the case</label>
+        <label><input type="checkbox" id="csLockY"> Set step yields to the case yield</label>
+        <label><input type="checkbox" id="csLockL"> Set Protein A load (g/L resin)</label>
+        <label>Turnaround between batches (d) <input id="csTurn" type="number" step="any"></label>
+        <label>Operating days per year <input id="csOp" type="number" step="any"></label>
+        <label><input type="checkbox" id="csEnv5"> Include Case 5 in the design envelope</label>
+      </div>
+      <div class="muted small" style="margin-top:6px">The case is applied on top of the Inputs tab at run time. Yield = Protein A → fill train yield; every step yield is scaled by one factor. Load sets DBC_gL = load ÷ load_util and keeps the Protein A column volume from the Inputs.</div>
+    </div>
+
+    <div class="card">
+      <h3>Case preview (noise-free plan from the titre curve; no simulation)</h3>
+      <div id="casePreview" class="cards"><span class="muted">Loading…</span></div>
+    </div>
+
+    <div class="card" id="cmpCard">
+      <h3>All cases simulated side by side · design envelope · Case 5 vs Case 1</h3>
+      <div class="pfdbar no-print">
+        <button id="cmpBtn" type="button">Run all 5 cases</button>
+        <button id="envApply" type="button" class="ghost">Apply design-envelope sizing to Inputs and re-run</button>
+        <span id="cmpInfo" class="muted">Runs five simulations (up to a minute or two on the free server).</span>
+      </div>
+      <div id="cmpOut"></div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ INPUTS ═══════════════ -->
+  <section class="panel" id="tab-inputs">
+    <div class="card">
+      <h3>Run set-up</h3>
+      <div class="pfdbar">
+        <label>Upstream <select id="upMode">
+          <option value="profile">IDB: titre curve</option>
+          <option value="mechanistic">Legacy ATF perfusion model</option></select></label>
+        <label>Capture <select id="capMode">
+          <option value="batch">Case 5 flowsheet Protein A (2 trains, all steps)</option>
+          <option value="pcc">3-column PCC (lumped steps)</option></select></label>
+        <label>Titre curve (No case) <select id="molecule"></select></label>
+      </div>
+      <div class="muted small">These are the base inputs. With a case selected, fields with an <b style="color:#b45309">orange edge</b> are set by the case at run time (titre scale, step yields, Protein A DBC and capacity); the upstream mode is IDB and the curve shape follows the case settings. The Protein A column volume is column_capacity_g ÷ DBC_gL from these inputs.</div>
+      <div id="caseChanges" style="margin-top:8px"></div>
+    </div>
+    <div class="card">
+      <h3>Parameters (defaults are illustrative — replace with site data)</h3>
+      <div id="paramForm"></div>
+      <label class="dist">Disturbances (JSON list; day = N day)
+        <textarea id="dist" rows="2">[]</textarea>
+      </label>
+      <div class="muted">Types: qp_step (factor; scales the titre curve in IDB mode), feed_glucose_step (factor) and vcd_sensor_bias (bias) for the legacy model. Example: [{"type": "qp_step", "day": 10, "factor": 0.85}]</div>
+      <label class="dist">Custom titre curve (JSON [[N day, g/L], …]; pick "Custom curve" as the titre curve or case shape)
+        <textarea id="customPts" rows="2">[]</textarea>
+      </label>
+    </div>
+  </section>
+
+  <!-- ═══════════════ HMB ═══════════════ -->
+  <section class="panel" id="tab-hmb">
+    <div class="card"><div class="muted small">HMB = mass balance of the last run (the model has no energy balance). Per batch from the hourly simulation; per year = per batch × the case's batches per year.</div></div>
+    <div class="grid">
+      <div class="card"><h3>Product (mAb) balance</h3><table id="hmbProduct"></table></div>
+      <div class="card"><h3>Water balance</h3><table id="hmbWater"></table></div>
+    </div>
+    <div class="card">
+      <h3>Stream totals over the batch (streams 1–63 as on the flowsheet)</h3>
+      <div class="tblwrap" style="max-height:560px"><table id="hmbStreams"></table></div>
+    </div>
+    <div class="card">
+      <h3>Stream table at one hour</h3>
+      <div class="pfdbar">
+        <input id="hmbSlider" type="range" min="0" max="0" value="0" step="1" aria-label="Simulation hour">
+        <span id="hmbClock" class="muted">—</span>
+      </div>
+      <div class="muted small">Same hour as the diagram on the Schematics tab; playback after a run moves it.</div>
       <div class="tblwrap"><table id="pfdTable"></table></div>
-    </details>
-  </div>
-
-  <div class="card no-print" id="vidCard">
-    <h3>Video export — dynamic start-up film with the steps running now</h3>
-    <div class="pfdbar">
-      <label>Start <select id="vidStart">
-        <option value="0" selected>Campaign start (N-1 seed)</option>
-        <option value="inoc">N inoculation</option>
-        <option value="cap">First Protein A cycle</option>
-        <option value="ds">First drug substance</option>
-        <option value="custom">At hour…</option></select></label>
-      <input id="vidHour" type="number" value="0" min="0" step="1" hidden aria-label="Start hour">
-      <label>Length <select id="vidLen">
-        <option value="1">1 hour</option><option value="6">6 hours</option><option value="24">1 day</option>
-        <option value="72">3 days</option><option value="168">1 week</option>
-        <option value="startup" selected>Start-up, until first drug substance</option>
-        <option value="all">To the end of the run</option></select></label>
-      <label>Speed <select id="vidRate">
-        <option value="auto" selected>Auto</option><option value="0.25">15 min/s</option><option value="1">1 h/s</option>
-        <option value="6">6 h/s</option><option value="24">1 day/s</option></select></label>
-      <label><input type="checkbox" id="vidTour" checked> Zoom to each unit as it joins</label>
-      <label>Size <select id="vidRes"><option value="1080" selected>1920×1080</option><option value="720">1280×720</option></select></label>
-      <button id="vidPreview" type="button" class="ghost">Preview</button>
-      <button id="vidRecord" type="button">● Record video</button>
-      <button id="vidStop" type="button" class="ghost" disabled>Stop</button>
     </div>
-    <span id="vidInfo" class="muted">Run a simulation first.</span>
-    <canvas id="vidCanvas" width="1920" height="1080"></canvas>
-    <div id="vidOut"></div>
-    <div class="muted" style="margin-top:6px">Recording runs in real time: keep this tab visible until it finishes. Safari and recent Chrome/Edge save MP4; Firefox saves WebM.</div>
-  </div>
+  </section>
 
-  <div class="card no-print" id="seqCard">
-    <h3>Step sequence film — every step of every unit, in order, coloured by solution</h3>
-    <div class="pfdbar">
-      <button id="seqPlay" type="button">▶ Play</button>
-      <input id="seqSlider" type="range" min="0" max="0" value="0" step="0.25" aria-label="Campaign hour">
-      <label>Speed <select id="seqSpeed">
-        <option value="0.25">15 min/s</option><option value="0.5" selected>30 min/s</option><option value="1">1 h/s</option>
-        <option value="3">3 h/s</option><option value="6">6 h/s</option><option value="24">1 day/s</option></select></label>
-      <label>Window <select id="seqWin">
-        <option value="3">3 h</option><option value="6">6 h</option><option value="12" selected>12 h</option>
-        <option value="24">1 day</option><option value="72">3 days</option></select></label>
-      <label>Jump to <select id="seqJump"><option value="">—</option>
-        <option value="pa">First Protein A load</option><option value="depth">First depth filtration</option>
-        <option value="aex">First AEX load</option><option value="cex">First CEX load</option>
-        <option value="vrf">First virus filtration</option><option value="ufdf">First UF/DF lot</option>
-        <option value="bds">First fill</option><option value="end">Campaign end (storage)</option></select></label>
-      <label>Record <select id="seqLen"><option value="6">6 h</option><option value="24" selected>1 day</option>
-        <option value="72">3 days</option><option value="all">to the end</option></select></label>
-      <button id="seqRecord" type="button">● Record video</button>
-      <button id="seqStopRec" type="button" class="ghost" disabled>Stop</button>
-      <label><input type="checkbox" id="seqFollow"> Follow diagram slider</label>
+  <!-- ═══════════════ DESIGN ═══════════════ -->
+  <section class="panel" id="tab-design">
+    <div id="notes" class="card"></div>
+    <div class="card" id="sizeCard"><h3>Equipment sizing</h3>
+      <div class="pfdbar no-print">
+        <button id="sizeAllBtn" type="button" class="ghost">Size for all titre curves (Inputs, No case)</button>
+        <button id="applySizeBtn" type="button" class="ghost">Apply sized values and re-run</button>
+        <span id="sizeInfo" class="muted">For the design envelope across Cases 1–3 use the Cases tab.</span>
+      </div>
+      <div id="sizing"></div>
     </div>
-    <span id="seqInfo" class="muted">Run a simulation first.</span>
-    <canvas id="seqCanvas" width="1920" height="1080"></canvas>
-    <div id="seqOut"></div>
-  </div>
+    <div class="card"><h3>Portfolio sizing across titre curves (Inputs, No case)</h3>
+      <div id="pfNotes"></div><div class="scroll"><table id="portfolio"></table></div></div>
+  </section>
 
-  <div id="notes" class="card"></div>
+  <!-- ═══════════════ OUTPUTS ═══════════════ -->
+  <section class="panel" id="tab-outputs">
+    <div class="card" id="caseOut"></div>
+    <div id="kpis" class="kpis"></div>
+    <div class="grid">
+      <div class="card"><h3>Permeate titre and NevAI 24 h forecast</h3><div class="chart"><canvas id="cTitre"></canvas></div></div>
+      <div class="card"><h3>Product harvested and Protein A cycles per day</h3><div class="chart"><canvas id="cGrams"></canvas></div></div>
+      <div class="card"><h3>Solutions per day by unit (incl. WFI)</h3><div class="chart"><canvas id="cBuffer"></canvas></div></div>
+      <div class="card"><h3>Solutions next 24 h: NevAI forecast vs actual</h3><div class="chart"><canvas id="cBufFc"></canvas></div></div>
+      <div class="card"><h3>Harvest surge tank</h3><div class="chart"><canvas id="cSump"></canvas></div></div>
+      <div class="card"><h3>Cells: N-1 seed and N reactor</h3><div class="chart"><canvas id="cCells"></canvas></div></div>
+      <div class="card"><h3>Viral inactivation and Protein A vessel</h3><div class="chart"><canvas id="cVi"></canvas></div></div>
+      <div class="card"><h3>Downstream vessels (batching between units)</h3><div class="chart"><canvas id="cVes"></canvas></div></div>
+      <div class="card"><h3>Wastewater flow and NevAI forecast</h3><div class="chart"><canvas id="cWw"></canvas></div></div>
+    </div>
+    <div class="card"><h3>Daily wastewater by stream</h3><div class="chart" style="height:320px"><canvas id="cDaily"></canvas></div></div>
+    <div class="grid">
+      <div class="card"><h3>Solutions used (litres drawn from each tote)</h3><div class="scroll"><table id="solutions"></table></div></div>
+      <div class="card"><h3>Raw materials (approximate kg)</h3><table id="chemicals"></table></div>
+      <div class="card"><h3>Vessels (peak volume = sizing)</h3><table id="vessels"></table></div>
+      <div class="card"><h3>Drug substance lots</h3><table id="lots"></table></div>
+    </div>
+    <div class="grid">
+      <div class="card"><h3>Wastewater streams</h3><table id="streams"></table></div>
+      <div class="card"><h3>Where product was lost</h3><table id="losses"></table>
+        <h3 style="margin-top:12px">Wastewater by driver</h3><table id="drivers"></table>
+        <h3 style="margin-top:12px">Wastewater by route</h3><table id="routes"></table></div>
+    </div>
+    <div class="card"><h3>Events and alarms</h3><table id="events"></table></div>
+  </section>
 
-  <div class="grid">
-    <div class="card"><h3>Permeate titre and NevAI 24 h forecast</h3><div class="chart"><canvas id="cTitre"></canvas></div></div>
-    <div class="card"><h3>Product harvested and Protein A cycles per day</h3><div class="chart"><canvas id="cGrams"></canvas></div></div>
-    <div class="card"><h3>Solutions per day by unit (incl. WFI)</h3><div class="chart"><canvas id="cBuffer"></canvas></div></div>
-    <div class="card"><h3>Solutions next 24 h: NevAI forecast vs actual</h3><div class="chart"><canvas id="cBufFc"></canvas></div></div>
-    <div class="card"><h3>Harvest surge tank</h3><div class="chart"><canvas id="cSump"></canvas></div></div>
-    <div class="card"><h3>Cells: N-1 seed and N reactor</h3><div class="chart"><canvas id="cCells"></canvas></div></div>
-    <div class="card"><h3>Viral inactivation and Protein A vessel</h3><div class="chart"><canvas id="cVi"></canvas></div></div>
-    <div class="card"><h3>Downstream vessels (batching between units)</h3><div class="chart"><canvas id="cVes"></canvas></div></div>
-    <div class="card"><h3>Wastewater flow and NevAI forecast</h3><div class="chart"><canvas id="cWw"></canvas></div></div>
-  </div>
-  <div class="card"><h3>Daily wastewater by stream</h3><div class="chart" style="height:320px"><canvas id="cDaily"></canvas></div></div>
+  <!-- ═══════════════ SCHEMATICS & DIAGRAMS ═══════════════ -->
+  <section class="panel" id="tab-diagrams">
+    <div class="card" id="pfdCard">
+      <h3>Process flow diagram — live playback of the last run (every step shown on its unit)</h3>
+      <div class="pfdbar">
+        <button id="pfdPlay" type="button">▶ Play</button>
+        <input id="pfdSlider" type="range" min="0" max="0" value="0" step="1" aria-label="Simulation hour">
+        <label>Speed <select id="pfdSpeed">
+          <option value="2">2 h/s</option><option value="6" selected>6 h/s</option>
+          <option value="12">12 h/s</option><option value="24">1 day/s</option><option value="72">3 days/s</option>
+        </select></label>
+        <span id="pfdClock" class="muted">—</span>
+        <button id="pfdSvg" type="button" class="ghost">Download SVG</button>
+      </div>
+      <div id="pfdBox"></div>
+      <div id="pfdNote" class="muted"></div>
+      <div class="muted small">The stream table for the hour shown is on the HMB tab.</div>
+    </div>
 
-  <div class="grid">
-    <div class="card"><h3>Solutions used (litres drawn from each tote)</h3><div class="scroll"><table id="solutions"></table></div></div>
-    <div class="card"><h3>Raw materials (approximate kg)</h3><table id="chemicals"></table></div>
-    <div class="card"><h3>Vessels (peak volume = sizing)</h3><table id="vessels"></table></div>
-    <div class="card"><h3>Drug substance lots</h3><table id="lots"></table></div>
-  </div>
+    <div class="card no-print" id="vidCard">
+      <h3>Video export — dynamic start-up film with the steps running now</h3>
+      <div class="pfdbar">
+        <label>Start <select id="vidStart">
+          <option value="0" selected>Campaign start (N-1 seed)</option>
+          <option value="inoc">N inoculation</option>
+          <option value="cap">First Protein A cycle</option>
+          <option value="ds">First drug substance</option>
+          <option value="custom">At hour…</option></select></label>
+        <input id="vidHour" type="number" value="0" min="0" step="1" hidden aria-label="Start hour">
+        <label>Length <select id="vidLen">
+          <option value="1">1 hour</option><option value="6">6 hours</option><option value="24">1 day</option>
+          <option value="72">3 days</option><option value="168">1 week</option>
+          <option value="startup" selected>Start-up, until first drug substance</option>
+          <option value="all">To the end of the run</option></select></label>
+        <label>Speed <select id="vidRate">
+          <option value="auto" selected>Auto</option><option value="0.25">15 min/s</option><option value="1">1 h/s</option>
+          <option value="6">6 h/s</option><option value="24">1 day/s</option></select></label>
+        <label><input type="checkbox" id="vidTour" checked> Zoom to each unit as it joins</label>
+        <label>Size <select id="vidRes"><option value="1080" selected>1920×1080</option><option value="720">1280×720</option></select></label>
+        <button id="vidPreview" type="button" class="ghost">Preview</button>
+        <button id="vidRecord" type="button">● Record video</button>
+        <button id="vidStop" type="button" class="ghost" disabled>Stop</button>
+      </div>
+      <span id="vidInfo" class="muted">Run a simulation first.</span>
+      <canvas id="vidCanvas" width="1920" height="1080"></canvas>
+      <div id="vidOut"></div>
+      <div class="muted" style="margin-top:6px">Recording runs in real time: keep this tab visible until it finishes. Safari and recent Chrome/Edge save MP4; Firefox saves WebM.</div>
+    </div>
 
-  <div class="card"><h3>Portfolio sizing across molecules (same settings)</h3>
-    <div id="pfNotes"></div><div class="scroll"><table id="portfolio"></table></div></div>
-
-  <div class="grid">
-    <div class="card"><h3>Wastewater streams</h3><table id="streams"></table></div>
-    <div class="card"><h3>Where product was lost</h3><table id="losses"></table>
-      <h3 style="margin-top:12px">Wastewater by driver</h3><table id="drivers"></table>
-      <h3 style="margin-top:12px">Wastewater by route</h3><table id="routes"></table></div>
-  </div>
-  <div class="card"><h3>Events and alarms</h3><table id="events"></table></div>
+    <div class="card no-print" id="seqCard">
+      <h3>Step sequence film — every step of every unit, in order, coloured by solution</h3>
+      <div class="pfdbar">
+        <button id="seqPlay" type="button">▶ Play</button>
+        <input id="seqSlider" type="range" min="0" max="0" value="0" step="0.25" aria-label="Campaign hour">
+        <label>Speed <select id="seqSpeed">
+          <option value="0.25">15 min/s</option><option value="0.5" selected>30 min/s</option><option value="1">1 h/s</option>
+          <option value="3">3 h/s</option><option value="6">6 h/s</option><option value="24">1 day/s</option></select></label>
+        <label>Window <select id="seqWin">
+          <option value="3">3 h</option><option value="6">6 h</option><option value="12" selected>12 h</option>
+          <option value="24">1 day</option><option value="72">3 days</option></select></label>
+        <label>Jump to <select id="seqJump"><option value="">—</option>
+          <option value="pa">First Protein A load</option><option value="depth">First depth filtration</option>
+          <option value="aex">First AEX load</option><option value="cex">First CEX load</option>
+          <option value="vrf">First virus filtration</option><option value="ufdf">First UF/DF lot</option>
+          <option value="bds">First fill</option><option value="end">Campaign end (storage)</option></select></label>
+        <label>Record <select id="seqLen"><option value="6">6 h</option><option value="24" selected>1 day</option>
+          <option value="72">3 days</option><option value="all">to the end</option></select></label>
+        <button id="seqRecord" type="button">● Record video</button>
+        <button id="seqStopRec" type="button" class="ghost" disabled>Stop</button>
+        <label><input type="checkbox" id="seqFollow"> Follow diagram slider</label>
+      </div>
+      <span id="seqInfo" class="muted">Run a simulation first.</span>
+      <canvas id="seqCanvas" width="1920" height="1080"></canvas>
+      <div id="seqOut"></div>
+    </div>
+  </section>
 
   <div id="printParams" class="card print-only"></div>
 </main>
@@ -264,20 +395,35 @@ const PAL = ['#0e7c7b', '#2563eb', '#d97706', '#7c3aed', '#dc2626', '#16a34a', '
              '#a16207', '#db2777', '#64748b', '#4f46e5', '#059669', '#ea580c', '#9333ea', '#0f766e', '#be123c'];
 const CH = {};
 const SECTIONS = {n1: 'N-1 seed (media in = permeate to waste)', upstream: 'N reactor and TFF (IDB)',
-                  capture: 'Protein A (Case 5 recipe)', vi: 'Viral inactivation (Brij-9 or low pH)',
+                  capture: 'Protein A (Case 5 flowsheet recipe)', vi: 'Viral inactivation (Brij-9 or low pH)',
                   depth: 'Depth filtration (solution order assumed)', aex: 'AEX chromatography',
                   cex: 'CEX chromatography', polish: 'Polishing order, yields, virus filter changes',
                   vrf: 'Virus filtration', sptff: 'UF/DF and formulation', bds: 'BDS hold and fill',
                   dsp: 'Downstream run-out', pat: 'PAT sensor noise', bioreactor: 'Legacy ATF perfusion model',
-                  surge: 'Harvest surge (PCC mode)', pcc: 'PCC (PCC mode)', control: 'Control layer'};
+                  surge: 'Harvest surge (PCC mode)', pcc: 'PCC (PCC mode)', control: 'Control layer',
+                  sizing: 'Equipment sizing basis'};
 const SKIP = new Set(['upstream.mode', 'upstream.molecule', 'upstream.custom_points', 'capture.mode']);
 const CHOICES = {'polish.order': [['aex_cex', 'AEX → CEX (site PFD)'], ['cex_aex', 'CEX → AEX (legacy)']],
-                 'vi.mode': [['detergent', 'Brij-9 before Protein A (Case 5)'], ['low_ph', 'Low-pH hold after Protein A (legacy)']]};
+                 'vi.mode': [['detergent', 'Brij-9 before Protein A'], ['low_ph', 'Low-pH hold after Protein A (legacy)']]};
+const LOCKMAP = {
+  lock_titre: ['upstream.titre_scale'],
+  lock_yield: ['capture.capture_yield', 'pcc.capture_yield', 'depth.depth_yield', 'polish.aex_yield',
+               'polish.cex_yield', 'polish.vf_yield', 'sptff.sptff_yield', 'vi.vi_yield'],
+  lock_load: ['capture.DBC_gL', 'capture.column_capacity_g', 'pcc.DBC_gL'],
+};
+const SPECKEY = {lock_titre: 'avg_titre_gLd', lock_yield: 'yield_est', lock_load: 'capture_load_gL'};
+const SRCLAB = {avg_titre_gLd: 'titre', batches_per_year: 'batches', yield_est: 'yield', capture_load_gL: 'load'};
+const LOSS_LABEL = {tff_retentate: 'TFF cell concentrate (to bio-kill)', cell_bleed: 'Cell bleed (legacy model)',
+  atf_flush: 'ATF flush', ramp_harvest: 'Permeate to drain before capture', sump_overflow: 'Surge tank overflow',
+  capture: 'Protein A (step yield)', breakthrough: 'Protein A overload / breakthrough', vi: 'Low-pH VI (step yield)',
+  vi_divert: 'Low-pH VI divert', depth: 'Depth filtration (step yield)',
+  polishing: 'AEX, CEX and virus filtration (step yields)', sptff: 'UF/DF and fill (step yield)'};
 let OPS = ['capture', 'vi', 'depth', 'adjust', 'aex', 'cex', 'vf', 'sptff', 'bds'];
-let LAST = null;
+let LAST = null, SIZING = null, CASEDEF = null, PREV = {}, CMP = null, ACTIVE = '1', ENVVIEW = false, prevT = null;
 const KPIS = [
   ['Drug substance', 'drug_substance_kg', ' kg'], ['Overall yield', 'overall_yield_pct', ' %'],
-  ['N seed from N-1', 'n1_seed_vcd', ' ×10⁶/mL'], ['Final permeate titre', 'final_titre_gL', ' g/L'],
+  ['N seed from N-1', 'n1_seed_vcd', ' ×10⁶/mL'], ['N-1 duration', 'n1_days', ' d'],
+  ['Final permeate titre', 'final_titre_gL', ' g/L'],
   ['First capture cycle', 'first_cycle_n_day', ' (N day)'], ['Permeate before 1st cycle', 'first_cycle_sump_L', ' L'],
   ['Capture cycles', 'capture_cycles', ''], ['Peak cycles / day', 'peak_cycles_day', ''],
   ['Capture wait', 'capture_wait_h', ' h'], ['Solutions incl. WFI', 'buffer_m3', ' m³'],
@@ -308,7 +454,24 @@ async function api(path, body) {
 function setStatus(t, err) { const s = $('status'); s.textContent = t; s.className = err ? 'err' : 'muted'; }
 const fmt = v => (v === null || v === undefined) ? '—' : (typeof v === 'number' ? v.toLocaleString() : v);
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+function fx(v, d) {
+  if (v === null || v === undefined || v === '' || (typeof v === 'number' && !isFinite(v))) return '—';
+  if (typeof v !== 'number') return esc(v);
+  return v.toLocaleString(undefined, {maximumFractionDigits: d === undefined ? 2 : d});
+}
+const nz = v => (typeof v === 'number' && isFinite(v)) ? v : 0;
 
+// ── tabs ───────────────────────────────────────────────────────────
+function showTab(name) {
+  if (!$('tab-' + name)) name = 'cases';
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === name));
+  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('on', p.id === 'tab-' + name));
+  Object.values(CH).forEach(c => { try { c.resize(); } catch (e) { /* ignore */ } });
+  if (name === 'hmb') syncHmbSlider();
+  history.replaceState(null, '', '#' + name);
+}
+
+// ── parameters form ────────────────────────────────────────────────
 function field(sec, k, v) {
   const a = `data-sec="${sec}" data-k="${k}"`;
   const opts = CHOICES[sec + '.' + k];
@@ -350,36 +513,213 @@ function gather() {
   return p;
 }
 
-const pts = (S, k, shift) => S.filter(r => r[k] !== null && r[k] !== undefined && r[k] !== '')
-                              .map(r => ({x: r.day + (shift || 0), y: r[k]}));
-
-function ds(label, data, color, extra) {
-  return Object.assign({label, data, borderColor: color, backgroundColor: color,
-                        borderWidth: 1.6, pointRadius: 0}, extra || {});
+function applyParams(sug) {
+  let n = 0;
+  for (const [sec, kv] of Object.entries(sug || {}))
+    for (const [k, v] of Object.entries(kv)) {
+      const el = document.querySelector(`#paramForm [data-sec="${sec}"][data-k="${k}"]`);
+      if (el) { el.value = v; n++; }
+    }
+  return n;
 }
 
+// ── cases ──────────────────────────────────────────────────────────
+function caseSettings() {
+  return {titre_basis: $('csBasis').value, shape: $('csShape').value,
+          lock_titre: $('csLockT').checked, lock_yield: $('csLockY').checked, lock_load: $('csLockL').checked,
+          turnaround_days: parseFloat($('csTurn').value) || 0, operating_days: parseFloat($('csOp').value) || 330,
+          envelope_with_case5: $('csEnv5').checked};
+}
+function caseValues() {
+  const v = {};
+  document.querySelectorAll('#caseTable input[data-c]').forEach(i => {
+    const x = i.value.trim(), k = i.dataset.k;
+    let val = x === '' ? null : parseFloat(x);
+    if (val !== null && isNaN(val)) val = null;
+    if (val !== null && k === 'yield_est') val = val / 100;
+    (v[i.dataset.c] = v[i.dataset.c] || {})[k] = val;
+  });
+  return v;
+}
+function caseReq(id) {
+  if (!id || id === 'none' || !CASEDEF || !CASEDEF.cases[id]) return null;
+  return {id, settings: caseSettings(), values: caseValues()};
+}
+function caseLabel(id) {
+  if (!id || id === 'none' || !CASEDEF || !CASEDEF.cases[id]) return 'No case';
+  return `Case ${id} — ${CASEDEF.cases[id].name}`;
+}
+
+function buildCaseBar() {
+  const Cs = CASEDEF.cases;
+  $('caseBar').innerHTML = CASEDEF.order.map(id =>
+      `<button type="button" data-case="${id}">Case ${id}<small>${esc(Cs[id].short)}</small></button>`).join('') +
+    '<button type="button" data-case="env" class="env">Design case<small>envelope of Cases 1–3</small></button>' +
+    '<button type="button" data-case="none">No case<small>Inputs tab only</small></button>';
+  $('caseBar').querySelectorAll('button').forEach(b => { b.onclick = () => selectCase(b.dataset.case); });
+}
+function markCaseBar() {
+  $('caseBar').querySelectorAll('button').forEach(b => {
+    b.classList.toggle('on', ENVVIEW ? b.dataset.case === 'env' : b.dataset.case === ACTIVE);
+  });
+  document.querySelectorAll('#caseTable tr[data-case]').forEach(tr => tr.classList.toggle('on', tr.dataset.case === ACTIVE));
+  document.querySelectorAll('#casePreview .ccard').forEach(c => c.classList.toggle('on', c.dataset.case === ACTIVE));
+}
+
+function buildCaseTable() {
+  const Cs = CASEDEF.cases;
+  const inp = (id, k, v, pct) => `<input type="number" step="any" data-c="${id}" data-k="${k}" placeholder="—" value="${
+    v === null || v === undefined ? '' : (pct ? +(v * 100).toFixed(4) : v)}">`;
+  let h = '<thead><tr><th>Case #</th><th>Case description</th><th>Avg. titre (g/L/day)</th><th>Volume (batches/yr)</th>' +
+          '<th>Yield estimate (%)</th><th>Capture load (g/L)</th><th>Values not from the table</th><th class="no-print"></th></tr></thead><tbody>';
+  for (const id of CASEDEF.order) {
+    const c = Cs[id];
+    h += `<tr data-case="${id}"><td><b>${id}</b></td><td>${esc(c.name)}${id === '5' ? '<sup>1</sup>' : ''}</td>` +
+         `<td>${inp(id, 'avg_titre_gLd', c.avg_titre_gLd)}</td><td>${inp(id, 'batches_per_year', c.batches_per_year)}</td>` +
+         `<td>${inp(id, 'yield_est', c.yield_est, true)}</td><td>${inp(id, 'capture_load_gL', c.capture_load_gL)}</td>` +
+         `<td class="muted small" id="cSrc${id}">—</td>` +
+         `<td class="no-print"><button type="button" class="ghost" data-sel="${id}">Select</button></td></tr>`;
+  }
+  $('caseTable').innerHTML = h + '</tbody>';
+  $('caseTable').querySelectorAll('input').forEach(i => i.addEventListener('change', schedulePreview));
+  $('caseTable').querySelectorAll('button[data-sel]').forEach(b => { b.onclick = () => selectCase(b.dataset.sel); });
+  $('casePurpose').innerHTML = '<ul style="margin:8px 0 4px;padding-left:18px">' +
+    CASEDEF.order.map(id => `<li><b>Case ${id}</b> (${esc(CASEDEF.kind_labels[Cs[id].kind])}): ${esc(Cs[id].purpose)}</li>`).join('') +
+    '</ul><div class="muted">' + esc(CASEDEF.note1) + '</div>';
+}
+
+function buildCaseSettings() {
+  const s = CASEDEF.settings;
+  $('csShape').innerHTML = '<option value="auto">Auto: Figure 2 curve needing the least scaling</option>' +
+    Object.entries(CASEDEF.shapes).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('') +
+    '<option value="custom">Custom curve (Inputs tab)</option>';
+  $('csBasis').value = s.titre_basis; $('csShape').value = s.shape;
+  $('csLockT').checked = s.lock_titre; $('csLockY').checked = s.lock_yield; $('csLockL').checked = s.lock_load;
+  $('csTurn').value = s.turnaround_days; $('csOp').value = s.operating_days; $('csEnv5').checked = s.envelope_with_case5;
+  ['csBasis', 'csShape', 'csLockT', 'csLockY', 'csLockL', 'csTurn', 'csOp', 'csEnv5'].forEach(id =>
+    $(id).addEventListener('change', () => { schedulePreview(); markLocks(); }));
+}
+
+function schedulePreview() { clearTimeout(prevT); prevT = setTimeout(preview, 350); }
+
+async function preview() {
+  let params;
+  try { params = gather(); } catch (e) { $('casePreview').innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+  try {
+    const r = await api('/api/icb/cases/preview', {params, case: {settings: caseSettings(), values: caseValues()}});
+    PREV = {};
+    r.cases.forEach(c => { PREV[c.id] = c; });
+    renderPreview(r);
+    markLocks(); banner();
+  } catch (e) { $('casePreview').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+function renderPreview(r) {
+  $('casePreview').innerHTML = r.cases.map(c => {
+    const i = c.info, d = c.design || {}, o = c.occupancy || {};
+    const nU = (o.units || []).find(u => u.key === 'n') || {};
+    const b = i.spec.batches_per_year;
+    const notes = (c.notes || []).filter(n => !/^Design is consistent/.test(n)).slice(0, 3);
+    return `<div class="ccard" data-case="${c.id}"><div class="muted">Case ${c.id} · ${esc(i.kind_label)}</div><b>${esc(i.name)}</b>` +
+      '<table>' +
+      `<tr><td>Titre curve</td><td class="num">${esc(i.shape_label)} × ${fx(i.titre_scale, 3)}</td></tr>` +
+      `<tr><td>Run average</td><td class="num">${fx(i.plan_value)} ${esc(i.basis_unit)}${i.spec.avg_titre_gLd ? ' (case ' + fx(i.spec.avg_titre_gLd) + ')' : ''}</td></tr>` +
+      `<tr><td>Train yield (plan)</td><td class="num">${fx(100 * i.yield_plan, 1)} %</td></tr>` +
+      `<tr><td>Protein A load</td><td class="num">${fx(i.capture_load_gL, 1)} g/L · ${fx(i.capture_CV_L)} L/train</td></tr>` +
+      `<tr><td>Peak day</td><td class="num">${fx(d.peak_g_day, 0)} g · ${fx(d.peak_cycles_day)} of ${fx(d.max_cycles_day_at_peak, 1)} cycles</td></tr>` +
+      `<tr><td>First Protein A cycle</td><td class="num">N day ${fx(d.first_cycle_n_day)} · ${fx(d.first_cycle_sump_L, 0)} L</td></tr>` +
+      `<tr><td>DS per batch (plan)</td><td class="num">${fx(d.ds_kg_est, 3)} kg</td></tr>` +
+      `<tr><td>DS per year (plan)</td><td class="num">${b && d.ds_kg_est !== null && d.ds_kg_est !== undefined ? fx(b * d.ds_kg_est, 2) + ' kg' : '—'}</td></tr>` +
+      `<tr><td>N reactors for ${fx(b, 0)} batches</td><td class="num">${nU.lines ? nU.lines + ' (' + fx(nU.utilisation_pct, 0) + ' % busy)' : '—'}</td></tr>` +
+      '</table>' + notes.map(n => `<div class="note small">${esc(n)}</div>`).join('') +
+      `<button type="button" class="ghost no-print" data-sel="${c.id}">Select Case ${c.id}</button></div>`;
+  }).join('');
+  $('casePreview').querySelectorAll('button[data-sel]').forEach(b => { b.onclick = () => selectCase(b.dataset.sel); });
+  r.cases.forEach(c => {
+    const el = $('cSrc' + c.id);
+    if (el) el.textContent = Object.entries(c.info.source).filter(([, v]) => v !== 'case table')
+      .map(([k, v]) => `${SRCLAB[k]}: ${v}`).join('; ') || '—';
+  });
+  markCaseBar();
+}
+
+function markLocks() {
+  const st = caseSettings(), on = !!caseReq(ACTIVE);
+  const spec = on && PREV[ACTIVE] && PREV[ACTIVE].info ? PREV[ACTIVE].info.spec : null;
+  const locked = new Set();
+  if (on) for (const [lk, keys] of Object.entries(LOCKMAP)) {
+    if (!st[lk]) continue;
+    if (spec && (spec[SPECKEY[lk]] === null || spec[SPECKEY[lk]] === undefined)) continue;
+    keys.forEach(k => locked.add(k));
+  }
+  document.querySelectorAll('#paramForm [data-sec]').forEach(el => {
+    const lab = el.closest('label');
+    if (!lab) return;
+    const l = locked.has(el.dataset.sec + '.' + el.dataset.k);
+    lab.classList.toggle('locked', l);
+    lab.title = l ? `Set by Case ${ACTIVE} at run time; this value is the base the case starts from` : '';
+  });
+  $('molecule').disabled = on;
+  $('upMode').disabled = on;
+}
+
+function banner() {
+  const b = $('banner');
+  if (!CASEDEF) return;
+  let s;
+  if (!caseReq(ACTIVE)) s = '<b>No case</b> · the run uses the Inputs tab exactly as entered; per-year values need a case.';
+  else {
+    const c = CASEDEF.cases[ACTIVE], i = PREV[ACTIVE] && PREV[ACTIVE].info;
+    s = `<b>${esc(caseLabel(ACTIVE))}</b> · ${esc(CASEDEF.kind_labels[c.kind])}`;
+    if (i) s += ` · ${fx(i.spec.avg_titre_gLd)} ${esc(i.basis_unit)} · ${fx(i.spec.batches_per_year, 0)} batches/yr` +
+      ` · train yield ${i.spec.yield_est ? fx(100 * i.spec.yield_est, 1) + ' %' : 'Inputs'} · load ${fx(i.capture_load_gL, 1)} g/L resin` +
+      ` · ${esc(i.shape_label)} × ${fx(i.titre_scale, 3)}`;
+  }
+  if (LAST) {
+    const forId = LAST.caseId;
+    if (forId !== ACTIVE) s += ` <span class="bad">· results shown are for ${esc(caseLabel(forId))}: press Run</span>`;
+  }
+  if (ENVVIEW) s += ' · <b>Design case view:</b> envelope of Cases 1–3 on the Cases tab';
+  b.innerHTML = s;
+}
+
+function selectCase(id) {
+  if (id === 'env') {
+    ENVVIEW = true; markCaseBar(); banner(); showTab('cases');
+    $('cmpCard').scrollIntoView({behavior: 'smooth', block: 'start'});
+    runCompare();
+    return;
+  }
+  ENVVIEW = false;
+  ACTIVE = id;
+  markCaseBar(); markLocks(); banner();
+  run();
+}
+
+// ── charts ─────────────────────────────────────────────────────────
+const pts = (S, k, shift) => S.filter(r => r[k] !== null && r[k] !== undefined && r[k] !== '')
+                              .map(r => ({x: r.day + (shift || 0), y: r[k]}));
+function ds(label, data, color, extra) {
+  return Object.assign({label, data, borderColor: color, backgroundColor: color, borderWidth: 1.6, pointRadius: 0}, extra || {});
+}
 function line(id, datasets, yTitle, y2Title) {
   if (CH[id]) CH[id].destroy();
-  const scales = {x: {type: 'linear', title: {display: true, text: 'day'}},
-                  y: {title: {display: true, text: yTitle}}};
+  const scales = {x: {type: 'linear', title: {display: true, text: 'day'}}, y: {title: {display: true, text: yTitle}}};
   if (y2Title) scales.y2 = {position: 'right', title: {display: true, text: y2Title}, grid: {drawOnChartArea: false}};
   CH[id] = new Chart($(id), {type: 'line', data: {datasets},
     options: {animation: false, parsing: false, responsive: true, maintainAspectRatio: false,
               interaction: {mode: 'nearest', intersect: false},
               plugins: {legend: {labels: {boxWidth: 12, font: {size: 11}}}}, scales}});
 }
-
 function bars(id, labels, datasets, yTitle, y2Title, stacked) {
   if (CH[id]) CH[id].destroy();
   const scales = {x: {stacked: !!stacked, title: {display: true, text: 'day'}},
                   y: {stacked: !!stacked, beginAtZero: true, title: {display: true, text: yTitle}}};
-  if (y2Title) scales.y2 = {position: 'right', beginAtZero: true, title: {display: true, text: y2Title},
-                            grid: {drawOnChartArea: false}};
+  if (y2Title) scales.y2 = {position: 'right', beginAtZero: true, title: {display: true, text: y2Title}, grid: {drawOnChartArea: false}};
   CH[id] = new Chart($(id), {type: 'bar', data: {labels, datasets},
     options: {animation: false, responsive: true, maintainAspectRatio: false,
               plugins: {legend: {labels: {boxWidth: 10, font: {size: 10}}}}, scales}});
 }
-
 function stacked(w) {
   const keys = Object.keys(w.streams).filter(k => w.daily.some(d => d['L_' + k] > 0));
   bars('cDaily', w.daily.map(d => d.day),
@@ -403,10 +743,11 @@ function fcNotes(j) {
   });
 }
 
+// ── design tab ─────────────────────────────────────────────────────
 function renderDesign(d) {
   const n1 = d.n1 || {};
   const seed = n1.enabled
-    ? `N-1: ${n1.days} d at ${n1.VVD} VVD → ${n1.waste_L} L to waste, seeds N at ${n1.n_seed_vcd} ×10⁶/mL · `
+    ? `N-1: ${n1.days} d at ${n1.VVD} VVD (${n1.reason}) → ${n1.waste_L} L to waste, seeds N at ${n1.n_seed_vcd} ×10⁶/mL · `
     : `N-1 off, N seed ${n1.n_seed_vcd} ×10⁶/mL · `;
   let summary;
   if (d.mode === 'profile') {
@@ -418,8 +759,8 @@ function renderDesign(d) {
     summary = seed + `perfusion ${d.perfusion_VVD} VVD · bleed ${d.bleed_pct_of_feed}% of feed · harvest titre ${d.harvest_titre_gL} g/L · ` +
       `capture fill ${d.capture_fill_h} h vs recovery ${d.capture_recovery_h} h · ${d.ds_kg_day} kg DS/day`;
   }
-  let h = '<h3>Design check</h3>' + d.notes.map(n => `<div class="note">${n}</div>`).join('') +
-          `<div class="note muted">${summary}</div>`;
+  let h = `<h3>Design check — ${esc(caseLabel(LAST && LAST.caseId))}</h3>` + d.notes.map(n => `<div class="note">${esc(n)}</div>`).join('') +
+          `<div class="note muted">${esc(summary)}</div>`;
   if (d.daily && d.daily.length) {
     const row = (label, key) => `<tr><th>${label}</th>` + d.daily.map(r => `<td>${fmt(r[key])}</td>`).join('') + '</tr>';
     h += '<h3 style="margin-top:12px">Daily plan from the titre curve (noise-free)</h3><div class="scroll"><table>' +
@@ -431,16 +772,56 @@ function renderDesign(d) {
 }
 
 function renderPortfolio(pf) {
-  $('pfNotes').innerHTML = pf.notes.map(n => `<div class="note">${n}</div>`).join('');
-  $('portfolio').innerHTML = '<tr><th>Molecule</th><th>Peak g/day</th><th>Peak day</th><th>Peak cycles/day</th>' +
+  $('pfNotes').innerHTML = pf.notes.map(n => `<div class="note">${esc(n)}</div>`).join('');
+  $('portfolio').innerHTML = '<tr><th>Titre curve</th><th>Peak g/day</th><th>Peak day</th><th>Peak cycles/day</th>' +
     '<th>Column limit/day</th><th>First cycle (N day)</th><th>Permeate before 1st cycle L</th>' +
     '<th>Peak solutions L/day</th><th>% of sizing case</th><th>Product g (run)</th></tr>' +
-    pf.rows.map(r => `<tr><td>${r.label}</td><td>${fmt(r.peak_g_day)}</td><td>${fmt(r.peak_day)}</td>` +
+    pf.rows.map(r => `<tr><td>${esc(r.label)}</td><td>${fmt(r.peak_g_day)}</td><td>${fmt(r.peak_day)}</td>` +
       `<td>${fmt(r.peak_cycles_day)}</td><td>${fmt(r.max_cycles_day_at_peak)}</td><td>${fmt(r.first_cycle_n_day)}</td>` +
       `<td>${fmt(r.first_cycle_sump_L)}</td><td>${fmt(r.peak_buffer_L_day)}</td><td>${fmt(r.pct_of_buffer_sizing)}</td>` +
       `<td>${fmt(r.total_g)}</td></tr>`).join('');
 }
 
+function sizingHTML(sz, setBy, title) {
+  if (!sz || sz.error) return `<div class="err">${esc(sz ? sz.error : 'No sizing in this run')}</div>`;
+  let h = (sz.notes || []).map(n => `<div class="note muted">${esc(n)}</div>`).join('') +
+          (title ? `<div class="note"><b>${esc(title)}</b></div>` : '');
+  for (const g of sz.groups || []) {
+    h += `<h4>${esc(g.name)}</h4><div class="scroll sz"><table><tr><th>Tag</th><th>Item</th>` +
+      '<th class="num">Required</th><th class="num">Recommended</th><th class="num">Configured</th><th>Unit</th>' +
+      (setBy ? '<th>Set by</th>' : '') + '<th>Basis</th></tr>' +
+      g.rows.map(r => `<tr${r.flag ? ' class="flag"' : ''}><td><b>${esc(r.tag)}</b></td><td>${esc(r.item)}</td>` +
+        `<td class="num">${fmt(r.required)}</td><td class="num"><b>${fmt(r.recommended)}</b></td>` +
+        `<td class="num">${fmt(r.configured)}</td><td>${esc(r.unit)}</td>` + (setBy ? `<td>${esc(r.set_by || '')}</td>` : '') +
+        `<td class="b muted">${esc(r.basis)}${r.flag ? ' <span class="err">' + esc(r.flag) + '</span>' : ''}</td></tr>`).join('') +
+      '</table></div>';
+  }
+  return h;
+}
+function renderSizing(sz, scope) {
+  SIZING = sz;
+  const all = scope === 'all';
+  $('sizing').innerHTML = sizingHTML(sz, all, all ? 'Worst case across all titre curves (Inputs, No case)'
+                                                 : 'Sized for this run: ' + caseLabel(LAST && LAST.caseId));
+}
+async function sizeAll() {
+  const b = $('sizeAllBtn'); b.disabled = true;
+  $('sizeInfo').textContent = 'Running every titre curve… (up to a minute on the free server)';
+  try {
+    const r = await api('/api/icb/sizing', {params: gather(), seed: +$('seed').value || 0});
+    renderSizing(r, 'all');
+    $('sizeInfo').textContent = 'Worst case across ' + r.molecules.join(', ');
+  } catch (e) { $('sizeInfo').textContent = e.message; }
+  finally { b.disabled = false; }
+}
+function applySizing() {
+  if (!SIZING || !SIZING.suggested_params) { $('sizeInfo').textContent = 'Run or size first.'; return; }
+  const n = applyParams(SIZING.suggested_params);
+  $('sizeInfo').textContent = `Applied ${n} sized values to the Inputs; re-running…`;
+  run();
+}
+
+// ── outputs tab ────────────────────────────────────────────────────
 function dspTables(j) {
   $('solutions').innerHTML = '<tr><th>Solution</th><th>Used in</th><th class="num">L</th></tr>' +
     (j.solutions || []).map(r => `<tr><td>${esc(r.label)}</td><td class="muted">${esc(r.where)}</td><td class="num">${fmt(r.L)}</td></tr>`).join('');
@@ -456,22 +837,140 @@ function dspTables(j) {
 function tables(j) {
   const w = j.wastewater;
   $('streams').innerHTML = '<tr><th>Stream</th><th>Driver</th><th>Route</th><th>m³</th><th>Description</th></tr>' +
-    Object.entries(w.by_stream_m3).filter(([k, v]) => v > 0).sort((a, b) => b[1] - a[1])
+    Object.entries(w.by_stream_m3).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1])
       .map(([k, v]) => `<tr><td>${k.replace(/_/g, ' ')}</td><td>${w.streams[k].driver}</td><td>${w.streams[k].route}</td>` +
-                       `<td>${v}</td><td>${w.streams[k].desc}</td></tr>`).join('');
+                       `<td>${v}</td><td>${esc(w.streams[k].desc)}</td></tr>`).join('');
   $('drivers').innerHTML = '<tr><th>Driver</th><th>m³</th></tr>' +
     Object.entries(w.by_driver_m3).map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
   $('routes').innerHTML = '<tr><th>Route</th><th>m³</th></tr>' +
     Object.entries(w.by_route_m3).map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
   $('losses').innerHTML = '<tr><th>Loss point</th><th>g</th></tr>' +
-    Object.entries(j.kpi.losses_g).filter(([k, v]) => v > 0)
-      .map(([k, v]) => `<tr><td>${k.replace(/_/g, ' ')}</td><td>${v.toLocaleString()}</td></tr>`).join('');
+    Object.entries(j.kpi.losses_g).filter(([, v]) => v > 0)
+      .map(([k, v]) => `<tr><td>${esc(LOSS_LABEL[k] || k.replace(/_/g, ' '))}</td><td>${v.toLocaleString()}</td></tr>`).join('');
   $('events').innerHTML = '<tr><th>Day</th><th>Type</th><th>Message</th></tr>' +
-    (j.events.length ? j.events.map(e => `<tr><td>${e.day}</td><td>${e.type}</td><td>${e.msg}</td></tr>`).join('')
+    (j.events.length ? j.events.map(e => `<tr><td>${e.day}</td><td>${e.type}</td><td>${esc(e.msg)}</td></tr>`).join('')
                      : '<tr><td colspan="3" class="muted">No events</td></tr>');
   dspTables(j);
 }
 
+function checksHTML(list) {
+  return '<table><tr><th>Check</th><th class="num">Case value</th><th class="num">Run value</th><th class="num">Δ</th><th>Note</th></tr>' +
+    (list || []).map(c => `<tr><td>${esc(c.label)}</td>` +
+      `<td class="num">${c.target === null || c.target === undefined ? '—' : fx(c.target) + ' ' + esc(c.unit)}</td>` +
+      `<td class="num">${fx(c.value)} ${esc(c.unit)}</td>` +
+      `<td class="num ${c.ok === undefined ? '' : c.ok ? 'ok' : 'bad'}">${c.delta_pct === null || c.delta_pct === undefined ? '—' : (c.delta_pct > 0 ? '+' : '') + fx(c.delta_pct, 1) + ' %'}</td>` +
+      `<td class="muted small">${esc(c.note || '')}</td></tr>`).join('') + '</table>';
+}
+function annualHTML(a) {
+  return '<table><tr><th>Item</th><th>Unit</th><th class="num">Per batch</th><th class="num">Per year</th></tr>' +
+    (a.rows || []).map(r => `<tr><td>${esc(r.label)}</td><td>${esc(r.unit)}</td><td class="num">${fx(r.per_batch, 3)}</td>` +
+      `<td class="num">${r.per_year === null || r.per_year === undefined ? '—' : fx(r.per_year, 2)}</td></tr>`).join('') + '</table>';
+}
+function occHTML(o) {
+  if (!o) return '';
+  return `<div class="muted small">Campaign ${fx(o.campaign_days)} d (N-1 + N + downstream run-out); turnaround ${fx(o.turnaround_days)} d; ` +
+    `${fx(o.operating_days, 0)} operating days per year; one N reactor fits ${fx(o.max_batches_one_line, 0)} batches a year.</div>` +
+    '<table><tr><th>Unit</th><th class="num">Days per batch</th><th class="num">Days per year</th><th class="num">Lines needed</th><th class="num">Utilisation</th></tr>' +
+    (o.units || []).map(u => `<tr><td>${esc(u.label)}</td><td class="num">${fx(u.days_per_batch)}</td><td class="num">${fx(u.days_per_year, 1)}</td>` +
+      `<td class="num"><b>${fx(u.lines, 0)}</b></td><td class="num">${u.utilisation_pct === null || u.utilisation_pct === undefined ? '—' : fx(u.utilisation_pct, 0) + ' %'}</td></tr>`).join('') + '</table>';
+}
+function changesHTML(info) {
+  if (!info) return '<div class="muted small">No case: nothing on the Inputs tab was overridden.</div>';
+  if (!info.changes.length) return `<div class="muted small">Case ${info.id} changed no Inputs value.</div>`;
+  return `<h4>What Case ${info.id} changed at the last run</h4><div class="scroll"><table><tr><th>Parameter</th><th class="num">Inputs</th><th class="num">Case</th><th>Why</th></tr>` +
+    info.changes.map(c => `<tr><td>${esc(c.param)}</td><td class="num">${fx(c.inputs, 4)}</td><td class="num"><b>${fx(c.case, 4)}</b></td><td class="muted">${esc(c.why)}</td></tr>`).join('') +
+    '</table></div>';
+}
+function renderCaseOut(j) {
+  const c = j.case || {}, info = c.info, a = c.annual || {};
+  let h = `<h3>${esc(caseLabel(j.caseId))}</h3>`;
+  if (info) h += `<div class="note">${esc(info.purpose)}</div><div class="note muted">Titre curve ${esc(info.shape_label)} × ${fx(info.titre_scale, 3)} ` +
+    `(${fx(info.curve_value)} → ${fx(info.plan_value)} ${esc(info.basis_unit)}) · train yield ${fx(100 * info.yield_inputs, 1)} → ${fx(100 * info.yield_plan, 1)} % · ` +
+    `Protein A load ${fx(info.capture_load_gL, 1)} g/L resin, ${fx(info.capture_CV_L)} L per train · sources: ` +
+    Object.entries(info.source).map(([k, v]) => `${SRCLAB[k]} ${v}`).join(', ') + '</div>';
+  else h += '<div class="note muted">No case: the run uses the Inputs tab as entered; per-year values need a case (batches per year).</div>';
+  h += '<div class="grid"><div><h4>Checks against the case</h4>' + checksHTML(a.checks) + '</div>' +
+       `<div><h4>Per batch and per year${a.batches_per_year ? ' (' + fx(a.batches_per_year, 0) + ' batches)' : ''}</h4>` + annualHTML(a) + '</div></div>' +
+       '<h4>Occupancy and lines</h4>' + occHTML(a.occupancy) + changesHTML(info);
+  $('caseOut').innerHTML = h;
+  $('caseChanges').innerHTML = changesHTML(info);
+}
+
+// ── HMB tab ────────────────────────────────────────────────────────
+const pfdOk = () => !!(window.PFD && typeof PFD.length === 'function' && typeof PFD.state === 'function');
+function streamTotals(j) {
+  const n = pfdOk() ? PFD.length() : 0, S = j.series || [];
+  const dh = S.length > 1 ? ((S[1].h - S[0].h) || 1) : 1;
+  const tot = {};
+  for (let i = 0; i < n; i++) {
+    const st = PFD.state(i);
+    if (!st) continue;
+    for (const id in st.vals) {
+      const v = st.vals[id], t = tot[id] || (tot[id] = {L: 0, g: 0, hasG: false, nm: true, hours: 0});
+      if (!v) continue;
+      t.nm = false;
+      const L = nz(v.L);
+      t.L += L * dh;
+      if (L > 1e-6) t.hours += dh;
+      if (v.g !== undefined && v.g !== null) { t.g += nz(v.g) * dh; t.hasG = true; }
+    }
+  }
+  return tot;
+}
+function renderHMB(j) {
+  const k = j.kpi, B = j.case && j.case.annual ? j.case.annual.batches_per_year : null;
+  const py = (v, f) => (B && v !== null && v !== undefined) ? fx(v * B * (f || 1), 2) : '—';
+  // product balance
+  const made = nz(k.product_made_kg) * 1000, dsg = nz(k.drug_substance_kg) * 1000;
+  const losses = Object.entries(k.losses_g || {}).filter(([, v]) => v > 0);
+  const lossSum = losses.reduce((s, [, v]) => s + v, 0), inproc = nz(k.in_process_end_g);
+  const pc = v => made > 0 ? fx(100 * v / made, 1) + ' %' : '—';
+  let h = '<tr><th>Item</th><th class="num">g per batch</th><th class="num">% of made</th><th class="num">kg per year</th></tr>' +
+    `<tr><td><b>Product made in the N reactor</b></td><td class="num"><b>${fx(made, 0)}</b></td><td class="num">100 %</td><td class="num">${py(made, 1e-3)}</td></tr>` +
+    losses.map(([key, v]) => `<tr><td>&nbsp;&nbsp;Lost: ${esc(LOSS_LABEL[key] || key)}</td><td class="num">${fx(v, 0)}</td><td class="num">${pc(v)}</td><td class="num">${py(v, 1e-3)}</td></tr>`).join('') +
+    `<tr><td>&nbsp;&nbsp;Still in process at the end</td><td class="num">${fx(inproc, 0)}</td><td class="num">${pc(inproc)}</td><td class="num">${py(inproc, 1e-3)}</td></tr>` +
+    `<tr><td><b>Drug substance filled</b></td><td class="num"><b>${fx(dsg, 0)}</b></td><td class="num">${pc(dsg)}</td><td class="num">${py(dsg, 1e-3)}</td></tr>` +
+    `<tr><td>Closure (DS + losses + in process) ÷ made</td><td class="num" colspan="3">${made > 0 ? fx(100 * (dsg + lossSum + inproc) / made, 2) + ' %' : '—'}</td></tr>`;
+  $('hmbProduct').innerHTML = h;
+  // water balance
+  const n1 = nz(k.n1_waste_m3), media = nz(k.media_used_m3), sol = nz(k.buffer_m3);
+  const routes = Object.entries((j.wastewater || {}).by_route_m3 || {});
+  const dsv = nz(k.ds_volume_L) / 1000, vend = (j.vessels || []).reduce((s, v) => s + nz(v.end_L), 0) / 1000;
+  const tin = media + sol, tout = routes.reduce((s, [, v]) => s + nz(v), 0) + dsv + vend;
+  h = '<tr><th>Item</th><th class="num">m³ per batch</th><th class="num">m³ per year</th></tr>' +
+    `<tr><td>In: N-1 media</td><td class="num">${fx(n1, 3)}</td><td class="num">${py(n1)}</td></tr>` +
+    `<tr><td>In: N media</td><td class="num">${fx(media - n1, 3)}</td><td class="num">${py(media - n1)}</td></tr>` +
+    `<tr><td>In: solutions incl. WFI and Brij-9</td><td class="num">${fx(sol, 3)}</td><td class="num">${py(sol)}</td></tr>` +
+    `<tr><td><b>Total in</b></td><td class="num"><b>${fx(tin, 3)}</b></td><td class="num">${py(tin)}</td></tr>` +
+    routes.map(([r, v]) => `<tr><td>Out: wastewater to ${esc(r)}</td><td class="num">${fx(v, 3)}</td><td class="num">${py(v)}</td></tr>`).join('') +
+    `<tr><td>Out: drug substance filled</td><td class="num">${fx(dsv, 4)}</td><td class="num">${py(dsv)}</td></tr>` +
+    `<tr><td>Left in vessels at the end</td><td class="num">${fx(vend, 4)}</td><td class="num">${py(vend)}</td></tr>` +
+    `<tr><td><b>Total out</b></td><td class="num"><b>${fx(tout, 3)}</b></td><td class="num">${py(tout)}</td></tr>` +
+    `<tr><td>Difference (reactor contents, storage solutions held in columns and membranes)</td><td class="num">${fx(tin - tout, 3)}</td><td class="num">${py(tin - tout)}</td></tr>`;
+  $('hmbWater').innerHTML = h;
+  // stream totals
+  let tot = {};
+  try { tot = streamTotals(j); } catch (e) { tot = {}; }
+  const rows = [...document.querySelectorAll('#pfdTable tr[data-row]')].map(tr => [tr.dataset.row, tr.children[1].textContent]);
+  $('hmbStreams').innerHTML = '<thead><tr><th>Stream</th><th>Description</th><th class="num">Hours flowing</th><th class="num">L per batch</th>' +
+    '<th class="num">g per batch</th><th class="num">Mean g/L</th><th class="num">m³ per year</th><th class="num">kg per year</th></tr></thead><tbody>' +
+    rows.map(([id, d]) => {
+      const t = tot[id];
+      if (!t || t.nm) return `<tr><td><b>${esc(id)}</b></td><td>${esc(d)}</td><td colspan="6" class="muted">not modelled</td></tr>`;
+      return `<tr><td><b>${esc(id)}</b></td><td>${esc(d)}</td><td class="num">${fx(t.hours, 0)}</td><td class="num">${fx(t.L, 1)}</td>` +
+        `<td class="num">${t.hasG ? fx(t.g, 1) : '—'}</td><td class="num">${t.hasG && t.L > 1e-6 ? fx(t.g / t.L, 3) : '—'}</td>` +
+        `<td class="num">${py(t.L, 1e-3)}</td><td class="num">${t.hasG ? py(t.g, 1e-3) : '—'}</td></tr>`;
+    }).join('') + '</tbody>';
+  $('hmbSlider').max = Math.max(0, (pfdOk() ? PFD.length() : 1) - 1);
+  syncHmbSlider();
+}
+function syncHmbSlider() {
+  const ps = $('pfdSlider');
+  if (ps) $('hmbSlider').value = ps.value;
+  if (window.PFD && typeof PFD.clock === 'function') $('hmbClock').textContent = PFD.clock();
+}
+
+// ── one run ────────────────────────────────────────────────────────
 function render(j) {
   const k = j.kpi;
   $('kpis').innerHTML = KPIS.map(([l, key, u]) =>
@@ -508,10 +1007,13 @@ function render(j) {
                    .map(r => ({x: r.day, y: r.ww_fc_24h_L / 24})), C[4], {showLine: false, pointRadius: 2})], 'L/h');
   stacked(W);
   tables(j);
+  renderCaseOut(j);
+  renderSizing(j.sizing);
   fcNotes(j);
   if (window.PFD) PFD.load(j);
   if (window.PFDVideo) PFDVideo.load(j);
   if (window.SeqFilm) SeqFilm.load(j);
+  try { renderHMB(j); } catch (e) { $('hmbStreams').innerHTML = `<tr><td class="err">HMB table: ${esc(e.message)}</td></tr>`; }
 }
 
 async function run() {
@@ -519,16 +1021,19 @@ async function run() {
   if (window.PFD) PFD.pause();
   if (window.PFDVideo) PFDVideo.stop();
   if (window.SeqFilm) SeqFilm.stop();
-  setStatus('Running…');
+  const runFor = ACTIVE;
+  setStatus('Running ' + caseLabel(runFor) + '…');
   try {
     const params = gather();
-    const j = await api('/api/icb/simulate', {params, seed: +$('seed').value || 0,
-                                              downsample_h: 1, use_forecaster: $('useFc').checked});
+    const j = await api('/api/icb/simulate', {params, seed: +$('seed').value || 0, downsample_h: 1,
+                                              use_forecaster: $('useFc').checked, case: caseReq(runFor)});
+    j.caseId = caseReq(runFor) ? runFor : 'none';
+    j.seed = +$('seed').value || 0;
     LAST = j;
-    LAST.seed = +$('seed').value || 0;
     render(j);
+    banner();
     const why = fcReason(j);
-    setStatus('Done' + (j.forecaster_used ? ' · NevAI forecasts on' : ' · NevAI not used: ' + why));
+    setStatus('Done: ' + caseLabel(j.caseId) + (j.forecaster_used ? ' · NevAI forecasts on' : ' · NevAI not used: ' + why));
     if (!j.forecaster_used && $('useFc').checked) refreshAI();
     api('/api/icb/portfolio', {params}).then(renderPortfolio)
       .catch(e => { $('pfNotes').textContent = e.message; });
@@ -536,6 +1041,82 @@ async function run() {
   finally { $('runBtn').disabled = false; }
 }
 
+// ── all cases, envelope, Case 5 vs Case 1 ───────────────────────────
+async function runCompare() {
+  const b = $('cmpBtn'); b.disabled = true;
+  $('cmpInfo').textContent = 'Simulating all five cases… (up to a minute or two on the free server)';
+  try {
+    const r = await api('/api/icb/cases/compare', {params: gather(), seed: +$('seed').value || 0,
+                                                   case: {settings: caseSettings(), values: caseValues()}});
+    CMP = r;
+    renderCompare(r);
+    $('cmpInfo').textContent = 'Done · design envelope of ' + r.envelope_cases.map(c => 'Case ' + c).join(', ');
+  } catch (e) { $('cmpInfo').textContent = e.message; }
+  finally { b.disabled = false; }
+}
+
+function renderCompare(r) {
+  const cs = r.cases;
+  const head = '<tr><th></th>' + cs.map(c => `<th class="num">Case ${c.id}<br><span class="muted">${esc(c.info.short)}</span></th>`).join('') + '</tr>';
+  const row = (lab, f) => `<tr><td>${lab}</td>` + cs.map(c => `<td class="num">${f(c)}</td>`).join('') + '</tr>';
+  const K = (key, d, u) => c => c.kpi[key] === null || c.kpi[key] === undefined ? '—' : fx(c.kpi[key], d) + (u || '');
+  const ann = label => c => { const x = (c.annual.rows || []).find(q => q.label === label); return x && x.per_year !== null ? fx(x.per_year, 1) : '—'; };
+  const occ = key => c => { const u = (c.annual.occupancy.units || []).find(q => q.key === key); return u && u.lines ? `${u.lines} (${fx(u.utilisation_pct, 0)} %)` : '—'; };
+  const chk = key => c => {
+    const x = (c.annual.checks || []).find(q => q.key === key);
+    if (!x) return '—';
+    const cls = x.ok === undefined ? '' : x.ok ? 'ok' : 'bad';
+    return `<span class="${cls}">${fx(x.value)}</span>` + (x.target !== null && x.target !== undefined ? ` / ${fx(x.target)}` : '');
+  };
+  let h = '<h4>Case inputs as applied</h4><div class="scroll"><table>' + head +
+    row('Avg titre (case value)', c => fx(c.info.spec.avg_titre_gLd) + ' ' + esc(c.info.basis_unit)) +
+    row('Titre curve × scale', c => `${esc(c.info.shape_label)} × ${fx(c.info.titre_scale, 3)}`) +
+    row('Batches per year', c => fx(c.info.spec.batches_per_year, 0)) +
+    row('Train yield (plan)', c => fx(100 * c.info.yield_plan, 1) + ' %') +
+    row('Protein A load (g/L resin)', c => fx(c.info.capture_load_gL, 1)) + '</table></div>';
+  h += '<h4>Checks (simulated / case value)</h4><div class="scroll"><table>' + head +
+    row('Productivity g/L/day', chk('productivity')) + row('Mean permeate titre g/L', chk('titre')) +
+    row('Train yield, simulated %', chk('yield_sim')) + row('Overall yield %', chk('yield_overall')) + '</table></div>';
+  h += '<h4>Per batch (simulated)</h4><div class="scroll"><table>' + head +
+    row('Drug substance', K('drug_substance_kg', 3, ' kg')) + row('Product made', K('product_made_kg', 3, ' kg')) +
+    row('First Protein A cycle', K('first_cycle_n_day', 2, ' N day')) + row('Protein A cycles', K('capture_cycles', 0)) +
+    row('Peak cycles / day', K('peak_cycles_day', 0)) + row('Capture wait', K('capture_wait_h', 0, ' h')) +
+    row('Solutions incl. WFI', K('buffer_m3', 3, ' m³')) + row('Solutions per g DS', K('buffer_L_per_g_ds', 2, ' L/g')) +
+    row('Peak solution day', K('buffer_daily_peak_L', 0, ' L')) + row('Wastewater', K('wastewater_m3', 2, ' m³')) +
+    row('Wastewater per kg DS', K('wastewater_m3_per_kg_ds', 1, ' m³/kg')) + row('Peak wastewater day', K('ww_daily_peak_m3', 2, ' m³')) +
+    row('Lots / containers', c => `${fx(c.kpi.lots, 0)} / ${fx(c.kpi.containers, 0)}`) +
+    row('Alarms', c => Object.entries(c.alarms || {}).map(([a, n]) => `${esc(a)} ×${n}`).join('<br>') || '—') + '</table></div>';
+  h += '<h4>Per year</h4><div class="scroll"><table>' + head +
+    row('Drug substance kg', ann('Drug substance')) + row('Media m³', ann('Media (N-1 + N)')) +
+    row('Solutions m³', ann('Solutions incl. WFI and Brij-9')) + row('Wastewater m³', ann('Wastewater, all routes')) +
+    row('Protein A cycles', ann('Protein A cycles')) + row('Resin lifetimes', ann('Protein A resin lifetimes used per column / train')) +
+    row('Depth filters', ann('Depth filters')) + row('Virus filter changes', ann('Virus filter changes')) +
+    row('N-1 reactors (utilisation)', occ('n1')) + row('N reactors (utilisation)', occ('n')) +
+    row('Downstream trains (utilisation)', occ('dsp')) + '</table></div>';
+  const inc = r.increment;
+  if (inc) {
+    h += '<h4>Case 5 vs Case 1 — incremental capacity (Note 1)</h4>' + inc.notes.map(n => `<div class="note muted small">${esc(n)}</div>`).join('') +
+      '<div class="scroll"><table><tr><th>Group</th><th>Tag</th><th>Item</th><th>Unit</th><th class="num">Case 1 required</th>' +
+      '<th class="num">Case 5 required</th><th class="num">Case 1 recommended</th><th class="num">Case 5 recommended</th>' +
+      '<th class="num">Ratio</th><th class="num">Scaling factor</th></tr>' +
+      inc.rows.map(q => `<tr${q.ratio > 1.05 ? ' class="up"' : ''}><td>${esc(q.group)}</td><td>${esc(q.tag)}</td><td>${esc(q.item)}</td>` +
+        `<td>${esc(q.unit)}</td><td class="num">${fmt(q.case1)}</td><td class="num">${fmt(q.case5)}</td>` +
+        `<td class="num">${fmt(q.rec1)}</td><td class="num">${fmt(q.rec5)}</td><td class="num"><b>${fx(q.ratio, 2)}</b></td>` +
+        `<td class="num">${fx(q.factor, 2)}</td></tr>`).join('') + '</table></div>';
+  }
+  h += '<h4>Design case — equipment envelope of ' + r.envelope_cases.map(c => 'Case ' + c).join(', ') + '</h4>' +
+       sizingHTML(r.envelope, true, '');
+  $('cmpOut').innerHTML = h;
+}
+
+function applyEnvelope() {
+  if (!CMP || !CMP.envelope) { $('cmpInfo').textContent = 'Run all 5 cases first.'; return; }
+  const n = applyParams(CMP.envelope.suggested_params);
+  $('cmpInfo').textContent = `Applied ${n} envelope values to the Inputs; re-running ${caseLabel(ACTIVE)}. Run all 5 cases again to check the envelope.`;
+  run();
+}
+
+// ── NevAI ──────────────────────────────────────────────────────────
 let pollT = null, wasTraining = false;
 async function refreshAI() {
   try {
@@ -556,7 +1137,6 @@ async function refreshAI() {
     }
   } catch (e) { $('aiState').textContent = 'NevAI status unavailable'; }
 }
-
 async function trainAI() {
   try {
     let params;
@@ -567,6 +1147,7 @@ async function trainAI() {
   refreshAI();
 }
 
+// ── print ──────────────────────────────────────────────────────────
 function paramTables(p) {
   const tbl = (title, obj) => '<table><tr><th colspan="2">' + esc(title) + '</th></tr>' +
     Object.entries(obj).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(typeof v === 'object' ? JSON.stringify(v) : v)}</td></tr>`).join('') +
@@ -574,25 +1155,26 @@ function paramTables(p) {
   let h = tbl('Run', {run_days: p.run_days, lot_window_h: p.lot_window_h,
                       disturbances: p.disturbances && p.disturbances.length ? p.disturbances : 'none'});
   for (const [sec, title] of Object.entries(SECTIONS)) if (p[sec]) h += tbl(title, p[sec]);
-  return '<h3>Parameters used in this run</h3><div class="ptab">' + h + '</div>';
+  return '<h3>Parameters used in this run (after the case was applied)</h3><div class="ptab">' + h + '</div>';
 }
-
 function preparePrint() {
   if (window.PFD) PFD.pause();
   if (window.PFDVideo) PFDVideo.stop();
   if (window.SeqFilm) SeqFilm.stop();
+  document.body.classList.add('printall');
   for (const [id, ch] of Object.entries(CH)) {
+    try { ch.resize(); } catch (e) { /* ignore */ }
     const box = $(id).parentNode;
     let img = box.querySelector('img.pimg');
     if (!img) { img = document.createElement('img'); img.className = 'pimg'; img.alt = ''; box.appendChild(img); }
     try { img.src = ch.toBase64Image('image/png', 1); } catch (e) { /* leave blank */ }
   }
   const p = LAST ? LAST.params : null;
-  const mol = $('molecule').selectedOptions[0] ? $('molecule').selectedOptions[0].textContent : '';
   const why = fcReason(LAST);
   $('printHead').innerHTML = '<h2>IDB mAb digital twin — simulation report</h2><div class="muted">' +
-    esc([new Date().toLocaleString(), mol, $('upMode').selectedOptions[0].textContent,
-         $('capMode').selectedOptions[0].textContent,
+    esc([new Date().toLocaleString(), caseLabel(LAST && LAST.caseId),
+         p ? (p.upstream.mode === 'mechanistic' ? 'Legacy ATF model' : 'IDB titre curve') : '',
+         p ? (p.capture.mode === 'pcc' ? '3-column PCC' : 'Protein A 2 trains') : '',
          p ? (p.vi.mode === 'low_ph' ? 'low-pH VI' : 'Brij-9 VI') : '',
          p ? 'polishing ' + (p.polish.order === 'cex_aex' ? 'CEX → AEX' : 'AEX → CEX') : '',
          'seed ' + (LAST ? LAST.seed : '—'),
@@ -600,17 +1182,21 @@ function preparePrint() {
     '<br>Diagram shown at ' + esc(window.PFD ? PFD.clock() : '—') + '</div>';
   $('printParams').innerHTML = p ? paramTables(p) : '<div class="muted">Run a simulation first.</div>';
 }
-
 function printReport() {
   if (!LAST) { setStatus('Run a simulation before printing', true); return; }
   if (!LAST.forecaster_used && $('useFc').checked &&
       !confirm('This run has no NevAI forecasts (' + fcReason(LAST) + '), so the NevAI charts will be empty.\n\n' +
-               'Print anyway? (Cancel, wait for "NevAI: ready", then Run simulation.)')) return;
+               'Print anyway? (Cancel, wait for "NevAI: ready", then Run.)')) return;
   preparePrint();
-  setTimeout(() => window.print(), 50);
+  setTimeout(() => window.print(), 80);
 }
 window.addEventListener('beforeprint', preparePrint);
+window.addEventListener('afterprint', () => {
+  document.body.classList.remove('printall');
+  Object.values(CH).forEach(c => { try { c.resize(); } catch (e) { /* ignore */ } });
+});
 
+// ── start ──────────────────────────────────────────────────────────
 async function init() {
   api('/api/me').then(m => {
     if (m.auth && m.user) { $('whoName').textContent = 'Signed in as ' + m.user; $('who').hidden = false; }
@@ -618,22 +1204,44 @@ async function init() {
   if (window.PFD) PFD.init();
   if (window.PFDVideo) PFDVideo.init();
   if (window.SeqFilm) SeqFilm.init();
-  const def = await api('/api/icb/defaults');
+  document.querySelectorAll('#tabs button').forEach(b => { b.onclick = () => showTab(b.dataset.tab); });
+  showTab(location.hash.slice(1) || 'cases');
+  const [def, cd] = await Promise.all([api('/api/icb/defaults'), api('/api/icb/cases')]);
+  CASEDEF = cd;
   OPS = def.buffer_ops || OPS;
   buildForm(def.params);
-  $('molecule').innerHTML = Object.entries(def.profiles).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join('') +
+  $('molecule').innerHTML = Object.entries(def.profiles).map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join('') +
                             '<option value="custom">Custom curve</option>';
   $('molecule').value = def.params.upstream.molecule;
   $('upMode').value = def.params.upstream.mode;
   $('capMode').value = def.params.capture.mode;
+  buildCaseBar(); buildCaseTable(); buildCaseSettings();
   $('runBtn').onclick = run;
   $('trainBtn').onclick = trainAI;
   $('printBtn').onclick = printReport;
+  $('sizeAllBtn').onclick = sizeAll;
+  $('applySizeBtn').onclick = applySizing;
+  $('cmpBtn').onclick = () => { ENVVIEW = true; markCaseBar(); banner(); runCompare(); };
+  $('envApply').onclick = applyEnvelope;
+  $('caseReset').onclick = () => { buildCaseTable(); schedulePreview(); };
+  $('paramForm').addEventListener('change', schedulePreview);
+  ['capMode', 'customPts', 'dist'].forEach(id => $(id).addEventListener('change', schedulePreview));
   $('molecule').onchange = () => {
-    if ($('molecule').value === 'custom') { $('paramPanel').open = true; $('customPts').focus(); }
+    if ($('molecule').value === 'custom') { showTab('inputs'); $('customPts').focus(); }
+    schedulePreview();
   };
+  $('hmbSlider').oninput = e => {
+    const ps = $('pfdSlider');
+    if (!ps) return;
+    ps.value = e.target.value;
+    ps.dispatchEvent(new Event('input'));
+    $('hmbClock').textContent = window.PFD ? PFD.clock() : '—';
+  };
+  setInterval(() => { if ($('tab-hmb').classList.contains('on')) syncHmbSlider(); }, 250);   // follow diagram playback
+  markCaseBar();
   await refreshAI();
-  run();
+  await preview();
+  selectCase(ACTIVE);
 }
 init().catch(e => setStatus(e.message, true));
 </script>
