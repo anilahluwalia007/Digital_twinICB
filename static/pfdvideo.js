@@ -624,13 +624,14 @@
     c.restore();
   }
 
+  // drawn last in frame(), right-aligned in the HUD header row: never cropped, never covered
   function watermark(c) {
     c.save();
-    c.globalAlpha = 0.75;
-    c.font = `600 15px ${FONT}`;
+    c.font = `700 15px ${FONT}`;
     c.textAlign = 'right';
-    c.fillStyle = GREY;
-    c.fillText(WATERMARK, VW - 24, VH - 6);
+    c.fillStyle = INK;
+    c.globalAlpha = 0.8;
+    c.fillText(WATERMARK, HUD.x + HUD.w - 32, HUD.y + 50);   // same baseline as "IDB mAb DIGITAL TWIN"
     c.restore();
   }
 
