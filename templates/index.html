@@ -223,6 +223,15 @@ tr.up td{background:#fef3c7}
           <option value="batch">Case 5 flowsheet Protein A (2 trains, all steps)</option>
           <option value="pcc">3-column PCC (lumped steps)</option></select></label>
         <label>Titre curve (No case) <select id="molecule"></select></label>
+        <label>Reactor design basis (N-3 → N-1) <select id="stBasis">
+          <option value="biology|biology">Biology: durations and transfer densities from Seed_sim</option>
+          <option value="biology|rule">Biology durations + rule-of-thumb transfer densities</option>
+          <option value="rule|biology">Rule-of-thumb durations (fixed μ) + biology transfer densities</option>
+          <option value="rule|rule">Rules of thumb only</option></select></label>
+        <label>N reactor size from <select id="nBasis">
+          <option value="demand">Annual demand + biology titre (Demand)</option>
+          <option value="twin">Twin N reactor (bioreactor.V_L)</option>
+          <option value="manual">Manual (seedtrain.manual_*)</option></select></label>
       </div>
       <div class="muted small">These are the base inputs. With a case selected, fields with an <b style="color:#b45309">orange edge</b> are set by the case at run time (titre scale, step yields, Protein A DBC and capacity); the upstream mode is IDB and the curve shape follows the case settings. The Protein A column volume is column_capacity_g ÷ DBC_gL from these inputs.</div>
       <div id="caseChanges" style="margin-top:8px"></div>
@@ -265,6 +274,12 @@ tr.up td{background:#fef3c7}
   <!-- ═══════════════ DESIGN ═══════════════ -->
   <section class="panel" id="tab-design">
     <div id="notes" class="card"></div>
+    <div class="card" id="seedCard"><h3>Reactor design: seed train N-3 → N-1 and production reactor N</h3>
+      <div class="muted small">Biology (Seed_sim) and/or rules of thumb, as chosen under Reactor design basis on the Inputs tab; recomputed with every run. Untick seedtrain.apply_to_n1 to keep the twin's perfusion N-1.</div>
+      <div id="seedTrain"></div>
+      <h4>Production reactor N from annual demand (fed-batch biology basis)</h4>
+      <div id="demandOut"></div>
+    </div>
     <div class="card" id="sizeCard"><h3>Equipment sizing</h3>
       <div class="pfdbar no-print">
         <button id="sizeAllBtn" type="button" class="ghost">Size for all titre curves (Inputs, No case)</button>
@@ -281,6 +296,23 @@ tr.up td{background:#fef3c7}
   <section class="panel" id="tab-outputs">
     <div class="card" id="caseOut"></div>
     <div id="kpis" class="kpis"></div>
+    <div class="card" id="nevaiCard"><h3>NevAI in operation: actions, watch and buffer preparation</h3>
+      <div id="nevaiOut" class="small"></div>
+      <div class="pfdbar no-print" style="margin-top:8px">
+        <button id="benefitBtn" type="button" class="ghost">Measure NevAI benefit (advisory vs acting)</button>
+        <span id="benefitInfo" class="muted">Runs the selected case twice with the same seed.</span>
+      </div>
+      <div id="benefitOut"></div>
+    </div>
+    <div class="card"><h3>Biology model (Bio_sim): key results</h3><div id="bioRes"></div></div>
+    <div class="grid">
+      <div class="card"><h3>Biology: titre and cell density</h3><div class="chart"><canvas id="cBioTitre"></canvas></div></div>
+      <div class="card"><h3>Biology: viability, growth and death rates</h3><div class="chart"><canvas id="cBioRates"></canvas></div></div>
+      <div class="card"><h3>Biology: nutrients, waste and osmolality</h3><div class="chart"><canvas id="cBioMetab"></canvas></div></div>
+      <div class="card"><h3>Biology: specific productivity and IVCD</h3><div class="chart"><canvas id="cBioQp"></canvas></div></div>
+      <div class="card"><h3>Seed stages (Seed_sim): growth curves and transfer points</h3><div class="chart"><canvas id="cSeedX"></canvas></div></div>
+      <div class="card"><h3>Seed stages: net growth and the late-exponential threshold</h3><div class="chart"><canvas id="cSeedMu"></canvas></div></div>
+    </div>
     <div class="grid">
       <div class="card"><h3>Permeate titre and NevAI 24 h forecast</h3><div class="chart"><canvas id="cTitre"></canvas></div></div>
       <div class="card"><h3>Product harvested and Protein A cycles per day</h3><div class="chart"><canvas id="cGrams"></canvas></div></div>
@@ -395,6 +427,8 @@ const PAL = ['#0e7c7b', '#2563eb', '#d97706', '#7c3aed', '#dc2626', '#16a34a', '
              '#a16207', '#db2777', '#64748b', '#4f46e5', '#059669', '#ea580c', '#9333ea', '#0f766e', '#be123c'];
 const CH = {};
 const SECTIONS = {n1: 'N-1 seed (media in = permeate to waste)', upstream: 'N reactor and TFF (IDB)',
+                  bio: 'Biology model (Bio_inputs)', seedtrain: 'Seed train N-3 → N (Seed_train)',
+                  demand: 'Production reactor N from demand (Demand)',
                   capture: 'Protein A (Case 5 flowsheet recipe)', vi: 'Viral inactivation (Brij-9 or low pH)',
                   depth: 'Depth filtration (solution order assumed)', aex: 'AEX chromatography',
                   cex: 'CEX chromatography', polish: 'Polishing order, yields, virus filter changes',
@@ -404,7 +438,11 @@ const SECTIONS = {n1: 'N-1 seed (media in = permeate to waste)', upstream: 'N re
                   sizing: 'Equipment sizing basis'};
 const SKIP = new Set(['upstream.mode', 'upstream.molecule', 'upstream.custom_points', 'capture.mode']);
 const CHOICES = {'polish.order': [['aex_cex', 'AEX → CEX (site PFD)'], ['cex_aex', 'CEX → AEX (legacy)']],
-                 'vi.mode': [['detergent', 'Brij-9 before Protein A'], ['low_ph', 'Low-pH hold after Protein A (legacy)']]};
+                 'vi.mode': [['detergent', 'Brij-9 before Protein A'], ['low_ph', 'Low-pH hold after Protein A (legacy)']],
+                 'seedtrain.n_basis': [['demand', 'Demand-based (Demand sheet)'], ['twin', 'Twin N reactor (bioreactor.V_L)'], ['manual', 'Manual']],
+                 'seedtrain.duration_basis': [['biology', 'Biology (Seed_sim)'], ['rule', 'Rule of thumb (fixed μ)']],
+                 'seedtrain.density_basis': [['biology', 'Biology (growth still ≥ threshold)'], ['rule', 'Rule of thumb (xt_rule_*)']],
+                 'bio.titre_link': [['fedbatch', 'Fed-batch titre (Bio_sim)'], ['perfusion', 'Perfusion: qP·Xv / VVD']]};
 const LOCKMAP = {
   lock_titre: ['upstream.titre_scale'],
   lock_yield: ['capture.capture_yield', 'pcc.capture_yield', 'depth.depth_yield', 'polish.aex_yield',
@@ -434,7 +472,10 @@ const KPIS = [
   ['Wastewater', 'wastewater_m3', ' m³'], ['Wastewater per kg DS', 'wastewater_m3_per_kg_ds', ' m³/kg'],
   ['WW volume-driven', 'ww_volume_driven_pct', ' %'], ['WW mass-driven', 'ww_mass_driven_pct', ' %'],
   ['NevAI buffer forecast error', 'nevai_buffer_forecast_mape_pct', ' %'],
-  ['NevAI next-load error', 'nevai_switch_forecast_mae_h', ' h']
+  ['NevAI next-load error', 'nevai_switch_forecast_mae_h', ' h'],
+  ['NevAI early partial loads', 'nevai_partial_loads', ''], ['NevAI watch flags', 'nevai_watch_flags', ' h'],
+  ['NevAI first flag', 'nevai_watch_first_flag_n_day', ' (N day)'], ['NevAI watch peak score', 'nevai_watch_peak_score', ''],
+  ['Vial → N harvest (seed train)', 'seed_train_days', ' d'], ['Biology model titre', 'bio_titre_gL', ' g/L']
 ];
 
 async function api(path, body) {
@@ -746,7 +787,9 @@ function fcNotes(j) {
 // ── design tab ─────────────────────────────────────────────────────
 function renderDesign(d) {
   const n1 = d.n1 || {};
-  const seed = n1.enabled
+  const seed = n1.enabled && n1.batch
+    ? `N-1 (batch seed-train stage): ${n1.days} d, ${n1.media_L} L of medium, nothing to waste, seeds N at ${n1.n_seed_vcd} ×10⁶/mL · `
+    : n1.enabled
     ? `N-1: ${n1.days} d at ${n1.VVD} VVD (${n1.reason}) → ${n1.waste_L} L to waste, seeds N at ${n1.n_seed_vcd} ×10⁶/mL · `
     : `N-1 off, N seed ${n1.n_seed_vcd} ×10⁶/mL · `;
   let summary;
@@ -933,7 +976,7 @@ function renderHMB(j) {
     `<tr><td>Closure (DS + losses + in process) ÷ made</td><td class="num" colspan="3">${made > 0 ? fx(100 * (dsg + lossSum + inproc) / made, 2) + ' %' : '—'}</td></tr>`;
   $('hmbProduct').innerHTML = h;
   // water balance
-  const n1 = nz(k.n1_waste_m3), media = nz(k.media_used_m3), sol = nz(k.buffer_m3);
+  const n1 = nz(k.n1_media_m3 !== undefined ? k.n1_media_m3 : k.n1_waste_m3), media = nz(k.media_used_m3), sol = nz(k.buffer_m3);
   const routes = Object.entries((j.wastewater || {}).by_route_m3 || {});
   const dsv = nz(k.ds_volume_L) / 1000, vend = (j.vessels || []).reduce((s, v) => s + nz(v.end_L), 0) / 1000;
   const tin = media + sol, tout = routes.reduce((s, [, v]) => s + nz(v), 0) + dsv + vend;
@@ -970,6 +1013,101 @@ function syncHmbSlider() {
   if (window.PFD && typeof PFD.clock === 'function') $('hmbClock').textContent = PFD.clock();
 }
 
+// ── biology model, seed train and demand (icb_bio.py) ──────────────
+const STAGE_C = {n3: '#7c3aed', n2: '#2563eb', n1: '#0e7c7b'};
+const bp = (rows, k) => (rows || []).filter(r => r[k] !== null && r[k] !== undefined).map(r => ({x: r.day, y: r[k]}));
+const formEl = (sec, k) => document.querySelector(`#paramForm [data-sec="${sec}"][data-k="${k}"]`);
+function setForm(sec, k, v) { const el = formEl(sec, k); if (el) el.value = v; }
+function syncDesignSelects() {
+  const d = formEl('seedtrain', 'duration_basis'), x = formEl('seedtrain', 'density_basis'), n = formEl('seedtrain', 'n_basis');
+  if (d && x) $('stBasis').value = d.value + '|' + x.value;
+  if (n) $('nBasis').value = n.value;
+}
+
+function renderBio(b) {
+  if (!b || b.error) {
+    ['bioRes', 'seedTrain', 'demandOut'].forEach(id => {
+      $(id).innerHTML = `<div class="err">${esc(b ? b.error : 'No biology result in this run')}</div>`; });
+    return;
+  }
+  const B = b.bio, R = B.results, S = B.series, end = B.run_days;
+  const K = [['Final titre', R.final_titre_gL, 3, ' g/L'], ['Target reached', R.target_day, 1, ' d'],
+    ['Peak VCD', R.peak_vcd, 2, ' ×10⁶/mL'], ['Day of peak VCD', R.peak_vcd_day, 1, ''],
+    ['Final viability', R.final_viability_pct, 1, ' %'], ['Antibody per batch', R.final_mass_kg, 2, ' kg'],
+    ['Lowest glucose', R.min_glucose_gL, 2, ' g/L'], ['Peak lactate', R.peak_lactate_gL, 2, ' g/L'],
+    ['Day of peak lactate', R.peak_lactate_day, 1, ''], ['Peak ammonia', R.peak_ammonia_mM, 2, ' mM'],
+    ['Peak osmolality', R.peak_osm, 0, ' mOsm/kg'], ['Final volume', R.final_volume_L, 0, ' L'],
+    ['Final IVCD', R.final_ivcd, 1, ' 10⁶·d/mL'], ['Final qP', R.final_qP, 1, ' pg/cell/day']];
+  $('bioRes').innerHTML = (b.notes || []).map(n => `<div class="note muted small">${esc(n)}</div>`).join('') +
+    '<div class="kpis">' + K.map(([l, x, d, u]) => `<div class="kpi"><div class="l">${l}</div><div class="v">${
+      x === null || x === undefined ? 'not reached' : fx(x, d) + u}</div></div>`).join('') + '</div>';
+  line('cBioTitre', [ds('Titre g/L', bp(S, 'titre'), C[0]),
+    ds('Target g/L', [{x: 0, y: B.target_gL}, {x: end, y: B.target_gL}], C[3], {borderDash: [6, 4], borderWidth: 1}),
+    ds('Viable cells', bp(S, 'Xv'), C[2], {yAxisID: 'y2'}),
+    ds('Total cells', bp(S, 'Xt'), C[4], {yAxisID: 'y2', borderDash: [3, 3]})], 'g/L', '×10⁶ cells/mL');
+  line('cBioRates', [ds('Viability %', bp(S, 'viab'), C[0]),
+    ds('Growth rate μ', bp(S, 'mu'), C[2], {yAxisID: 'y2'}), ds('Death rate kd', bp(S, 'kd'), C[5], {yAxisID: 'y2'}),
+    ds('Net growth μ − kd', bp(S, 'net'), C[4], {yAxisID: 'y2', borderDash: [4, 3]})], 'viability %', '1/day');
+  line('cBioMetab', [ds('Glucose g/L', bp(S, 'glc'), C[0]), ds('Lactate g/L', bp(S, 'lac'), C[3]),
+    ds('Glutamine mM', bp(S, 'gln'), C[2]), ds('Ammonia mM', bp(S, 'amm'), C[5]),
+    ds('Osmolality mOsm/kg', bp(S, 'osm'), C[4], {yAxisID: 'y2'})], 'g/L or mM', 'mOsm/kg');
+  line('cBioQp', [ds('qP pg/cell/day', bp(S, 'qP'), C[0]),
+    ds('IVCD 10⁶ cell·day/mL', bp(S, 'ivcd'), C[2], {yAxisID: 'y2'})], 'pg/cell/day', 'IVCD');
+  const seeds = Object.entries(b.seed_sim || {});
+  line('cSeedX', seeds.flatMap(([k, s]) => [ds(s.name + ' VCD', bp(s.rows, 'Xv'), STAGE_C[k] || C[0]),
+    ds(s.name + ' transfer', s.transfer_day === null || s.transfer_day === undefined ? [] : [{x: s.transfer_day, y: s.xt}],
+       STAGE_C[k] || C[0], {showLine: false, pointRadius: 6, pointStyle: 'rectRot'})]), '×10⁶ cells/mL');
+  line('cSeedMu', seeds.flatMap(([k, s]) => {
+    const last = s.rows.length ? s.rows[s.rows.length - 1].day : 10;
+    return [ds(s.name + ' net growth', bp(s.rows, 'net'), STAGE_C[k] || C[0]),
+            ds(s.name + ' threshold', [{x: 0, y: s.threshold_net}, {x: last, y: s.threshold_net}], STAGE_C[k] || C[0],
+               {borderDash: [5, 4], borderWidth: 1})]; }), '1/day');
+
+  // seed-train table
+  const T = b.seed_train, cols = [...T.stages, T.n];
+  const r = (lab, f, u) => `<tr><td>${lab}</td>` + cols.map(s => `<td class="num">${f(s)}</td>`).join('') + `<td class="muted">${u || ''}</td></tr>`;
+  const v = (k, d) => s => fx(s[k], d);
+  const chk = row => `<tr><td>${esc(row.label)}</td>` + row.cells.map(c => c
+    ? `<td class="num ${c.ok ? 'ok' : 'bad'}">${c.ok ? 'OK' : 'Check'} · ${esc(c.text)}</td>` : '<td class="num muted">—</td>').join('') + '<td></td></tr>';
+  let h = `<div class="note"><b>${esc(T.overall)}</b></div><div class="note muted small">Basis: ${esc(T.basis_label)} · N from ${esc(T.n.source)}</div>` +
+    '<div class="scroll"><table><tr><th>Parameter</th>' + cols.map(s => `<th class="num">${esc(s.name)}</th>`).join('') + '<th>Unit</th></tr>' +
+    r('Vessel type', s => esc(s.type || '')) + r('Seed density at start', v('x0', 2), '×10⁶/mL') +
+    r('Transfer density, biology (Seed_sim)', v('xt_bio', 3), '×10⁶/mL') + r('Transfer density, rule of thumb', v('xt_rule', 2), '×10⁶/mL') +
+    r('<b>Transfer density used</b>', s => `<b>${fx(s.xt, 3)}</b>`, '×10⁶/mL') +
+    r('<b>Working volume</b>', s => `<b>${fx(s.V_L, 1)}</b>`, 'L') + r('Viable cells at transfer', v('cells_1e9', 1), '10⁹ cells') +
+    r('Expansion within stage', v('expansion', 2), '×') + r('Stage duration, biology', v('dur_bio', 2), 'day') +
+    r('Stage duration, rule of thumb', v('dur_rule', 2), 'day') + r('<b>Stage duration used</b>', s => `<b>${fx(s.duration_d, 2)}</b>`, 'day') +
+    r('Net growth at transfer', v('net_pct', 1), '% of stage peak') + r('Viability at transfer', v('viab_pct', 1), '%') +
+    r('Glutamine left at transfer', v('gln_mM', 2), 'mM') + r('Split ratio into next stage', v('split', 2), '') +
+    r('<b>Nominal vessel</b>', s => `<b>${fx(s.vessel_L, 0)}</b>`, 'L') + r('Fill at start', v('fill_pct', 1), '% of nominal') +
+    r('Peak O₂ uptake', v('OUR', 3), 'mmol/L/h') + r('kLa needed with air only', v('kLa_air', 2), '1/h') +
+    r('Stage start', v('start_d', 2), 'day from thaw') + r('Stage end / transfer', v('end_d', 2), 'day from thaw') +
+    T.checks.map(chk).join('') + '</table></div>';
+  const tl = T.timeline;
+  h += `<div class="note small">Vial thaw: ${fx(tl.cells_n3_1e9, 2)} ×10⁹ cells needed to start N-3 = ${fx(tl.doublings, 2)} doublings ` +
+       `from one vial at ${fx(tl.mu_flask_d, 3)} /day (${esc(tl.mu_source)}) → ${fx(tl.flask_d, 2)} d of shake flasks · ` +
+       `vial thaw to N harvest <b>${fx(tl.vial_to_harvest_d, 1)} d</b>.</div>` +
+       (T.notes || []).map(n => `<div class="note muted small">${esc(n)}</div>`).join('');
+  $('seedTrain').innerHTML = h;
+
+  // demand
+  const D = b.demand, Sel = D.selected || {};
+  $('demandOut').innerHTML = '<table>' + [
+    ['Annual demand', fx(D.annual_kg, 1) + ' kg/yr'], ['Harvest titre (biology model)', fx(D.titre_gL, 3) + ' g/L'],
+    ['Harvest ÷ starting volume', fx(D.volume_ratio, 3)], ['Purified antibody per m³ of harvest', fx(D.kg_per_m3, 3) + ' kg/m³'],
+    ['Cycle (run + turnaround)', fx(D.cycle_d, 1) + ' d'], ['Batches per year per reactor', fx(D.batches_per_reactor, 0)],
+    ['Production reactors', fx(Sel.reactors, 0)], ['Purified antibody per batch', fx(Sel.kg_per_batch, 2) + ' kg'],
+    ['Required full working volume', fx(Sel.full_L, 0) + ' L'], ['Starting volume of N', fx(Sel.start_L, 0) + ' L'],
+    ['Selected standard vessel', fx(Sel.vessel_L, 0) + ' L'], ['Fill at harvest', fx(Sel.fill_pct, 1) + ' %'],
+    ['Annual capacity with this vessel', fx(Sel.capacity_kg_yr, 1) + ' kg/yr']]
+    .map(([l, x]) => `<tr><td>${l}</td><td class="num">${x}</td></tr>`).join('') + '</table>' +
+    '<h4>Options: 1–4 production reactors</h4><table><tr><th class="num">Reactors</th><th class="num">Batches/yr</th>' +
+    '<th class="num">Volume each L</th><th class="num">Standard vessel L</th><th class="num">Capacity kg/yr</th></tr>' +
+    (D.options || []).map(o => `<tr><td class="num">${fx(o.reactors, 0)}</td><td class="num">${fx(o.batches_per_year, 0)}</td>` +
+      `<td class="num">${fx(o.full_L, 0)}</td><td class="num">${fx(o.vessel_L, 0)}</td><td class="num">${fx(o.capacity_kg_yr, 1)}</td></tr>`).join('') +
+    '</table>' + (D.notes || []).map(n => `<div class="note muted small">${esc(n)}</div>`).join('');
+}
+
 // ── one run ────────────────────────────────────────────────────────
 function render(j) {
   const k = j.kpi;
@@ -979,7 +1117,9 @@ function render(j) {
   const S = j.series, W = j.wastewater, D = W.daily, days = D.map(d => d.day);
   line('cTitre', [ds('Permeate titre', pts(S, 'titre_harvest'), C[0]),
                   ds('Measured (PAT)', pts(S, 'titre_meas'), C[1], {borderWidth: 0.8}),
-                  ds('NevAI forecast (+24 h)', pts(S, 'titre_fc_24h', 1), C[4], {showLine: false, pointRadius: 2})], 'g/L');
+                  ds('NevAI forecast (+24 h)', pts(S, 'titre_fc_24h', 1), C[4], {showLine: false, pointRadius: 2}),
+                  ds('NevAI watch score', pts(S, 'nevai_watch'), C[5], {yAxisID: 'y2', borderWidth: 1})],
+       'g/L', 'watch score');
   bars('cGrams', days, [
     {label: 'Product harvested g/day', data: D.map(d => d.harvest_g), backgroundColor: C[0]},
     {type: 'line', label: 'Protein A cycles/day', data: D.map(d => d.cycles), borderColor: C[4],
@@ -1009,11 +1149,52 @@ function render(j) {
   tables(j);
   renderCaseOut(j);
   renderSizing(j.sizing);
+  try { renderBio(j.bio); } catch (e) { $('bioRes').innerHTML = `<div class="err">Biology view: ${esc(e.message)}</div>`; }
   fcNotes(j);
   if (window.PFD) PFD.load(j);
   if (window.PFDVideo) PFDVideo.load(j);
   if (window.SeqFilm) SeqFilm.load(j);
   try { renderHMB(j); } catch (e) { $('hmbStreams').innerHTML = `<tr><td class="err">HMB table: ${esc(e.message)}</td></tr>`; }
+  try { renderNevai(j); } catch (e) { $('nevaiOut').innerHTML = `<div class="err">NevAI view: ${esc(e.message)}</div>`; }
+}
+
+// ── NevAI in operation: actions, watch, buffer preparation ──────────
+function renderNevai(j) {
+  const n = j.nevai;
+  $('benefitOut').innerHTML = '';
+  if (!n) { $('nevaiOut').innerHTML = `<span class="muted">No NevAI in this run: ${esc(fcReason(j) || 'forecaster off')}.</span>`; return; }
+  const w = n.watch || {}, pr = n.prep;
+  let h = `<div class="note">Mode: <b>${n.acting ? 'acting' : 'advisory'}</b> (control.nevai_act) · ` +
+    `early partial Protein A loads: <b>${fx(n.partial_loads, 0)}</b></div>` +
+    `<div class="note">Watch: ${fx(w.flag_hours, 0)} h flagged · first flag ` +
+    `${w.first_flag_n_day === null || w.first_flag_n_day === undefined ? '—' : 'N day ' + fx(w.first_flag_n_day)} · ` +
+    `peak score ${fx(w.peak_score, 3)} (threshold ${fx(w.threshold, 2)})</div>`;
+  if ((n.detection || []).length) h += '<table><tr><th>Disturbance</th><th class="num">N day</th><th class="num">Flagged after</th></tr>' +
+    n.detection.map(d => `<tr><td>${esc(d.type)}</td><td class="num">${fx(d.n_day)}</td><td class="num">` +
+      `${d.detected_after_h === null || d.detected_after_h === undefined ? 'not flagged' : fx(d.detected_after_h, 0) + ' h'}</td></tr>`).join('') + '</table>';
+  if (pr) h += '<h4>Buffer preparation: NevAI forecast vs reactive (last 24 h)</h4><table><tr><th></th>' +
+    '<th class="num">Shortfall L</th><th class="num">Hours short</th><th class="num">Hold peak L</th><th class="num">Peak prep L/h</th></tr>' +
+    ['reactive', 'nevai'].map(k => `<tr><td>${k === 'nevai' ? 'NevAI forecast' : 'Reactive'}</td>` +
+      `<td class="num">${fx(pr[k].shortfall_L, 0)}</td><td class="num">${fx(pr[k].short_hours, 0)}</td>` +
+      `<td class="num">${fx(pr[k].hold_peak_L, 0)}</td><td class="num">${fx(pr[k].prep_peak_Lh, 1)}</td></tr>`).join('') +
+    `</table><div class="muted small">Same prep capacity for both: ${fx(pr.prep_capacity_Lh, 1)} L/h.</div>`;
+  $('nevaiOut').innerHTML = h;
+}
+
+async function benefit() {
+  const b = $('benefitBtn'); b.disabled = true;
+  $('benefitInfo').textContent = 'Running ' + caseLabel(ACTIVE) + ' twice… (up to a minute on the free server)';
+  try {
+    const r = await api('/api/icb/nevai/benefit', {params: gather(), seed: +$('seed').value || 0, case: caseReq(ACTIVE)});
+    $('benefitOut').innerHTML = '<table><tr><th>Result</th><th class="num">Advisory</th><th class="num">Acting</th><th class="num">Change</th></tr>' +
+      r.rows.map(q => {
+        const d = typeof q.advisory === 'number' && typeof q.acting === 'number' ? q.acting - q.advisory : null;
+        return `<tr><td>${esc(q.label)}</td><td class="num">${fx(q.advisory)}</td><td class="num">${fx(q.acting)}</td>` +
+               `<td class="num">${d === null ? '—' : (d > 0 ? '+' : '') + fx(d)}</td></tr>`;
+      }).join('') + '</table>';
+    $('benefitInfo').textContent = caseLabel(ACTIVE) + ', same seed; only control.nevai_act differs.';
+  } catch (e) { $('benefitInfo').textContent = e.message; }
+  finally { b.disabled = false; }
 }
 
 async function run() {
@@ -1211,11 +1392,16 @@ async function init() {
   OPS = def.buffer_ops || OPS;
   buildForm(def.params);
   $('molecule').innerHTML = Object.entries(def.profiles).map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join('') +
-                            '<option value="custom">Custom curve</option>';
+                            '<option value="biology">Biology model (Bio_sim)</option><option value="custom">Custom curve</option>';
   $('molecule').value = def.params.upstream.molecule;
   $('upMode').value = def.params.upstream.mode;
   $('capMode').value = def.params.capture.mode;
   buildCaseBar(); buildCaseTable(); buildCaseSettings();
+  syncDesignSelects();
+  $('stBasis').onchange = () => { const [d, x] = $('stBasis').value.split('|');
+    setForm('seedtrain', 'duration_basis', d); setForm('seedtrain', 'density_basis', x); schedulePreview(); };
+  $('nBasis').onchange = () => { setForm('seedtrain', 'n_basis', $('nBasis').value); schedulePreview(); };
+  $('paramForm').addEventListener('change', syncDesignSelects);
   $('runBtn').onclick = run;
   $('trainBtn').onclick = trainAI;
   $('printBtn').onclick = printReport;
@@ -1223,6 +1409,7 @@ async function init() {
   $('applySizeBtn').onclick = applySizing;
   $('cmpBtn').onclick = () => { ENVVIEW = true; markCaseBar(); banner(); runCompare(); };
   $('envApply').onclick = applyEnvelope;
+  $('benefitBtn').onclick = benefit;
   $('caseReset').onclick = () => { buildCaseTable(); schedulePreview(); };
   $('paramForm').addEventListener('change', schedulePreview);
   ['capMode', 'customPts', 'dist'].forEach(id => $(id).addEventListener('change', schedulePreview));
