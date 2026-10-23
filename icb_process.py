@@ -6,8 +6,12 @@ NavNevAI_mAbWasteWater · CarbonTesseract 2026
 IDB (site definition)
   N-1   perfusion seed: media in = cell-free permeate out to waste.
   N     continuous media feed; outflow = cells + broth + product (in = out).
-  TFF   removes all cells (cell concentrate -> bio-kill); permeate -> conditioned
-        media surge tank (harvest sump).
+  TFF   cell-free permeate -> conditioned media surge tank (harvest sump).
+        upstream.cell_retention = True (default): cells go back to the reactor and
+        only the cell bleed (bleed_frac of the outflow) goes to bio-kill; product
+        passage (sieve) falls with use and the TFF set is swapped at its capacity.
+        upstream.cell_retention = False: all cells leave in the TFF cell concentrate
+        (tff_retentate_frac of the outflow) to bio-kill.
   DSP   Case 5 flowsheet, run step by step in icb_dsp.py:
         Brij-9 in-line -> Protein A (columns 1&2, 3&4) -> Protein A vessel -> depth
         filtration -> surge tank -> Tris base + NaCl in-line -> AEX (2 columns) -> AEX
@@ -22,6 +26,9 @@ run reports litres per solution and kilograms per raw material. Step volumes and
 times are typical placeholders, not site data. The flowsheet names the depth
 filtration solutions but not their order; the order used here is assumed.
 
+Biology, seed train N-3 -> N and production-reactor sizing from demand live in icb_bio.py
+(parameters bio, seedtrain, demand below; titre curve "biology"; seedtrain.apply_to_n1).
+
 Units: time h, volume L, mass g, cell density 1e6 cells/mL, rates pg/cell/h.
 """
 from __future__ import annotations
@@ -29,6 +36,7 @@ import bisect
 import copy
 import math
 from dataclasses import dataclass, field, asdict, is_dataclass
+from icb_bio import bio_titre_points, apply_seed_train_to_n1
 
 # Permeate titre (g/L) against N day, digitised from Figure 2. Replace with raw data.
 TITRE_PROFILES = {
@@ -56,6 +64,14 @@ TITRE_PROFILES = {
         [12.0, 0.76], [13.0, 0.75], [14.0, 0.74]]},
 }
 
+# titre curves not digitised from Figure 2
+EXTRA_PROFILES = {"biology": "Biology model (Bio_sim)"}
+
+
+def profile_names(p):
+    """Every titre curve the portfolio and sizing loops run: Figure 2, the biology model, any custom curve."""
+    return list(TITRE_PROFILES) + list(EXTRA_PROFILES) + (["custom"] if p.upstream.custom_points else [])
+
 # ── solutions on the Case 5 flowsheet ─────────────────────────────────
 PKA_ACETIC, PKA_TRIS = 4.76, 8.07          # at 25 °C
 
@@ -76,6 +92,43 @@ def _tris(mM, pH):
 
 def _nacl(mM):
     return {"Sodium chloride": mM / 1000.0 * 58.44}
+
+
+def titrant_frac(buffer_mM, pKa_buffer, pH_in, pH_out, titrant_M, titrant_pKa=None, base=True):
+    """Litres of titrant per litre of pool to move one buffer from pH_in to pH_out.
+
+    Buffer only: the protein and any other species are not included, so this is a
+    starting point for the in-line addition, not a substitute for a titration.
+    titrant_pKa accounts for a weak titrant (Tris base, acetic acid); leave it None
+    for a strong one (NaOH, HCl).
+    """
+    def f(pH):
+        return 1.0 / (1.0 + 10 ** (pKa_buffer - pH))
+    need = (buffer_mM / 1000.0) * (f(pH_out) - f(pH_in))       # mol of strong base per L
+    if titrant_pKa is None:
+        eff = 1.0
+    elif base:
+        eff = 1.0 / (1.0 + 10 ** (pH_out - titrant_pKa))        # protonated share accepts H+
+    else:
+        eff = 1.0 / (1.0 + 10 ** (titrant_pKa - pH_out))        # dissociated share gives H+
+    return abs(need) / max(titrant_M * eff, 1e-12)
+
+
+def titrant_plan(p, capture_buffer_mM=25.0, aex_buffer_mM=50.0):
+    """In-line base before AEX and acid before CEX from the pH each step has to reach."""
+    return {"base_frac": titrant_frac(capture_buffer_mM, PKA_ACETIC, p.capture.elute_pH,
+                                      7.4, 2.0, PKA_TRIS, base=True),
+            "acid_frac": titrant_frac(aex_buffer_mM, PKA_TRIS, 7.4, p.cex.load_pH,
+                                      1.0, PKA_ACETIC, base=False)}
+
+
+def set_titrants(p, capture_buffer_mM=25.0, aex_buffer_mM=50.0):
+    """Size the in-line base and acid from the pH each step has to reach.
+    Call it after the case is applied; confirm both by titration."""
+    t = titrant_plan(p, capture_buffer_mM, aex_buffer_mM)
+    p.aex.base_frac = t["base_frac"]
+    p.cex.acid_frac = t["acid_frac"]
+    return p
 
 
 def _mix(*parts):
@@ -164,11 +217,24 @@ class UpstreamParams:
     molecule: str = "purple"
     custom_points: list = field(default_factory=list)
     VVD: float = 1.2
-    tff_retentate_frac: float = 0.02
     titre_scale: float = 1.0
     time_stretch: float = 1.0
     variation_sigma: float = 0.04
     variation_tau_h: float = 48.0
+    # --- cell handling at the TFF ---
+    cell_retention: bool = True       # True: cells go back to the reactor, only the bleed leaves
+    bleed_frac: float = 0.02          # share of the reactor outflow taken as cell bleed
+    tff_retentate_frac: float = 0.02  # used only when cell_retention is False
+    sieve0: float = 0.98              # product passage through a fresh TFF set
+    sieve_loss_per_day: float = 0.006
+    tff_area_m2: float = 7.2
+    tff_capacity_Lm2: float = 2000.0  # permeate per m² before a set is swapped
+    tff_swap_flush_L: float = 240.0   # media and caustic flush per swap
+
+
+def cell_out_frac(up):
+    """Share of the N outflow that leaves with the cells (bleed or TFF cell concentrate)."""
+    return up.bleed_frac if up.cell_retention else up.tff_retentate_frac
 
 
 @dataclass
@@ -225,6 +291,14 @@ class CaptureParams:
     max_sump_hold_h: float = 96.0
     capture_start_day: float = 0.0
     resin_cycles_max: int = 200
+    elute_pH: float = 4.45
+    sol_postload: str = "tris_74"
+    sol_wash1: str = "pa_wash1"
+    sol_wash2: str = "pa_wash2"
+    sol_elute: str = "pa_elute"
+    sol_strip: str = "pa_strip"
+    sol_cip: str = "naoh_05n"
+    sol_equil: str = "tris_74"
 
 
 @dataclass
@@ -340,6 +414,10 @@ class CEXParams:
     storage_wfi_CV: float = 2.0
     storage_CV: float = 3.0
     min_load_frac: float = 0.5
+    load_util: float = 0.90          # share of binding capacity actually loaded
+    load_pH: float = 5.5
+    sol_eq: str = "cex_eq"
+    sol_elute: str = "cex_elute"
 
 
 @dataclass
@@ -350,6 +428,7 @@ class PolishParams:
     vf_yield: float = 0.99
     vf_capacity_L: float = 300.0
     vf_flush_L: float = 2.0
+    prefilter_per_day: float = 0.0   # 0.2 um prefilters changed per day before the virus filter
 
 
 @dataclass
@@ -358,6 +437,10 @@ class VRFParams:
     equil_L: float = 2.0
     chase_L: float = 1.0
     trigger_elutions: float = 3.0
+    sol_equil: str = "cex_elute"
+    integrity_pre_h: float = 2.0
+    integrity_post_h: float = 2.0
+    max_hold_h: float = 24.0         # most material one filter may see
 
 
 @dataclass
@@ -378,6 +461,9 @@ class SPTFFParams:                   # UF/DF and formulation (name kept for comp
     cip_contact_h: float = 1.0
     storage_L: float = 10.0
     min_lot_g: float = 1.0
+    sol_df: str = "uf_df1"
+    sol_recover: str = "uf_df2"
+    sol_spike: str = "uf_spike"
 
 
 @dataclass
@@ -413,6 +499,16 @@ class ControlParams:
     viability_alarm: float = 0.80
     glucose_alarm_gL: float = 0.3
     titre_drop_alarm: float = 0.15
+    # --- NevAI in operation (icb_nevai_ops.py) ---
+    nevai_act: bool = False           # let forecasts start an early partial Protein A load
+    nevai_partial_min_frac: float = 0.3   # smallest partial load, share of a full load
+    nevai_hold_margin_h: float = 6.0  # act when product would pass the hold limit minus this
+    nevai_watch_lead_h: float = 6.0   # compare titre with the forecast issued this long before
+    nevai_watch_window_h: float = 6.0
+    nevai_watch_baseline_h: float = 48.0
+    nevai_watch_threshold: float = 0.12   # flag a forecast-error shift above this share
+    buffer_prep_Lh: float = 0.0       # buffer preparation capacity, L/h (0 = peak day / 20 h)
+    buffer_hold_days: float = 1.0     # prepared hold target, days of forecast use
 
 
 @dataclass
@@ -436,6 +532,114 @@ class SizingParams:                  # basis for icb_sizing.py: typical values, 
     ufdf_load_gm2: float = 500.0
     ufdf_crossflow_LMH: float = 300.0
     filter_flux_LMH: float = 1000.0  # in-line 0.2 um filters
+
+
+@dataclass
+class BioParams:                     # Bio_inputs: typical CHO values until fitted to the cell line
+    mu_max_d: float = 0.8
+    tau_lag_d: float = 0.6
+    K_glc_gL: float = 0.5
+    K_gln_mM: float = 0.3
+    KI_lac_gL: float = 10.0
+    KI_amm_mM: float = 15.0
+    osm_crit: float = 340.0
+    K_osm: float = 110.0
+    shift_day: float = 7.0           # beyond run_days = 37 °C throughout
+    T_before_C: float = 36.8         # labels only
+    T_after_C: float = 33.0
+    f_mu_shift: float = 0.45
+    f_qp_shift: float = 1.35
+    f_maint_shift: float = 0.75
+    f_kd_shift: float = 0.7
+    kd_min_d: float = 0.01
+    kd_amm_max_d: float = 0.2
+    Kd_amm_mM: float = 10.0
+    n_amm: float = 3.0
+    kd_osm_max_d: float = 0.25
+    Kd_osm: float = 560.0
+    n_osm: float = 8.0
+    kd_starve_max_d: float = 0.5
+    K_starve_gL: float = 0.1
+    k_lysis_d: float = 0.05
+    glc_per_cell: float = 0.3        # 1/Y_X/Glc, g/L per 1e6 cells/mL
+    m_glc: float = 0.06
+    gln_per_cell: float = 0.4        # 1/Y_X/Gln, mM per 1e6 cells/mL
+    m_gln: float = 0.015
+    Y_lac_glc: float = 0.9
+    q_lac_max: float = 0.06
+    K_lac_gL: float = 0.5
+    Y_amm_gln: float = 0.7
+    k_deg_gln_d: float = 0.07
+    S0_mOsm: float = 262.0
+    S_feed_mOsm: float = 900.0
+    qp_osm_rise: float = 0.35
+    qP_pg_cell_d: float = 22.0
+    X0: float = 0.8                  # also the N seed density in the seed train
+    glc0_gL: float = 6.0
+    gln0_mM: float = 4.0
+    lac0_gL: float = 0.1
+    amm0_mM: float = 0.5
+    V0_L: float = 1400.0
+    feed_start_d: float = 2.0
+    CSFR_pL_cell_d: float = 2.0
+    feed_glc_gL: float = 50.0
+    feed_gln_mM: float = 50.0
+    dt_d: float = 0.1
+    run_days: float = 14.0
+    target_titre_gL: float = 3.0
+    report_days: float = 0.5
+    titre_link: str = "fedbatch"     # titre curve "biology": "fedbatch" (Bio_sim titre) or "perfusion" (qP·Xv/VVD)
+
+
+@dataclass
+class SeedTrainParams:               # Seed_train: N-3, N-2, N-1 and N back to the vial
+    n_basis: str = "demand"          # N starting volume: "demand", "twin" (bioreactor.V_L), "manual"
+    manual_start_L: float = 1400.0
+    manual_vessel_L: float = 2000.0
+    duration_basis: str = "biology"  # "biology" (Seed_sim) or "rule" (fixed mu_rule_d)
+    density_basis: str = "biology"   # "biology" (net growth >= threshold) or "rule" (xt_rule_*)
+    growth_threshold_pct: float = 80.0
+    mu_rule_d: float = 0.65
+    vial_cells_1e6: float = 30.0
+    qO2_pmol_cell_h: float = 0.15
+    O2_sat_air_mM: float = 0.2
+    DO_pct: float = 40.0
+    sim_days: float = 10.0
+    type_n3: str = "Rocking bag"
+    type_n2: str = "Stirred tank"
+    type_n1: str = "Stirred tank"
+    max_fill_n3: float = 0.5
+    max_fill_n2: float = 1.0
+    max_fill_n1: float = 1.0
+    max_fill_n: float = 1.0
+    min_fill_n3: float = 0.1
+    min_fill_n2: float = 0.2
+    min_fill_n1: float = 0.2
+    min_fill_n: float = 0.2
+    seed_n3: float = 0.5
+    seed_n2: float = 0.5
+    seed_n1: float = 0.5
+    xt_rule_n3: float = 3.0
+    xt_rule_n2: float = 4.0
+    xt_rule_n1: float = 6.0
+    split_min: float = 4.0
+    split_max: float = 12.0
+    stage_min_d: float = 2.0
+    stage_max_d: float = 5.0
+    viability_min_pct: float = 95.0
+    apply_to_n1: bool = False        # run the twin's N-1 as this batch N-1 stage (train sized for the twin N)
+    vessel_sizes_L: list = field(default_factory=lambda: [2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 3000,
+                                                          5000, 10000, 12000, 15000, 20000, 25000])
+
+
+@dataclass
+class DemandParams:                  # Demand: production reactor N from annual demand
+    annual_kg: float = 400.0
+    dsp_yield: float = 0.75
+    batch_success: float = 0.95
+    turnaround_d: float = 3.0
+    operating_days: float = 330.0
+    n_reactors: int = 1
 
 
 def _cast(old, new):
@@ -472,6 +676,9 @@ class ICBParams:
     pat: PATParams = field(default_factory=PATParams)
     control: ControlParams = field(default_factory=ControlParams)
     sizing: SizingParams = field(default_factory=SizingParams)
+    bio: BioParams = field(default_factory=BioParams)
+    seedtrain: SeedTrainParams = field(default_factory=SeedTrainParams)
+    demand: DemandParams = field(default_factory=DemandParams)
     run_days: float = 14.0
     lot_window_h: float = 24.0       # UF/DF collects this long per lot
     disturbances: list = field(default_factory=list)
@@ -507,8 +714,9 @@ class ICBParams:
 WASTE_STREAMS = {
     "n1_permeate":         ("USP", "direct",         "volume", "N-1 permeate: spent media removed to intensify the seed"),
     "tff_retentate":       ("USP", "bio-kill",       "volume", "TFF cell concentrate from the N outflow"),
-    "cell_bleed":          ("USP", "bio-kill",       "volume", "Cell bleed (legacy ATF model)"),
+    "cell_bleed":          ("USP", "bio-kill",       "volume", "Cell bleed (TFF cell retention or legacy ATF model)"),
     "atf_flush":           ("USP", "bio-kill",       "event",  "ATF filter swap flush (legacy ATF model)"),
+    "tff_swap_flush":      ("USP", "bio-kill",       "event",  "TFF set swap: media push, caustic and rinse"),
     "ramp_harvest":        ("USP", "direct",         "volume", "Permeate to drain before capture starts (stream 2)"),
     "sump_overflow":       ("USP", "direct",         "event",  "Surge tank overflow (cell-free)"),
     "capture_flowthrough": ("DSP", "direct",         "volume", "Protein A load flow-through with Brij-9: high organic load"),
@@ -540,6 +748,8 @@ def _r(x, n=3):
 # ── titre curves ──────────────────────────────────────────────────────
 def profile_points(p):
     up = p.upstream
+    if up.molecule == "biology":
+        return bio_titre_points(p)
     if up.molecule == "custom" and up.custom_points:
         try:
             pts = sorted([float(a), float(b)] for a, b in up.custom_points)
@@ -551,9 +761,13 @@ def profile_points(p):
 
 
 def profile_label(p):
-    if p.upstream.molecule == "custom" and p.upstream.custom_points:
+    m = p.upstream.molecule
+    if m == "custom" and p.upstream.custom_points:
         return "Custom curve"
-    return TITRE_PROFILES.get(p.upstream.molecule, TITRE_PROFILES["purple"])["label"]
+    if m == "biology":
+        return EXTRA_PROFILES["biology"] + (" — perfusion qP·Xv/VVD" if p.bio.titre_link == "perfusion"
+                                            else " — fed-batch titre")
+    return TITRE_PROFILES.get(m, TITRE_PROFILES["purple"])["label"]
 
 
 def titre_at(p, n_day, pts=None):
@@ -649,11 +863,13 @@ def n1_summary(p):
     if not pl["enabled"]:
         return {"enabled": False, "hours": 0, "days": 0.0, "n_seed_vcd": round(br.X0, 3),
                 "waste_L": 0.0, "media_L": 0.0, "reason": "N-1 off"}
-    media = n1.VVD * n1.V_L / 24.0 * pl["hours"]
+    perf = n1.VVD * n1.V_L / 24.0 * pl["hours"]
+    media = perf if n1.VVD > 0 else n1.V_L          # batch N-1 (seed-train mode): one fill of medium
     return {"enabled": True, "hours": pl["hours"], "days": round(pl["hours"] / 24.0, 2),
             "V_L": n1.V_L, "VVD": n1.VVD, "final_vcd": round(pl["X_end"], 2),
             "n_seed_vcd": round(pl["seed_vcd"], 3), "target_seed_vcd": n1.target_seed_vcd or None,
-            "reason": pl["reason"], "media_L": round(media, 1), "waste_L": round(media, 1)}
+            "reason": pl["reason"], "media_L": round(media, 1), "waste_L": round(perf, 1),
+            "batch": n1.VVD <= 0}
 
 
 def _nominal_lot_g(p):
@@ -661,7 +877,7 @@ def _nominal_lot_g(p):
     up, br = p.upstream, p.bioreactor
     if up.mode == "mechanistic":
         return 500.0
-    Fp = up.VVD * br.V_L / 24.0 * (1 - up.tff_retentate_frac)
+    Fp = up.VVD * br.V_L / 24.0 * (1 - cell_out_frac(up))
     pts = profile_points(p)
     n = max(1, int(p.run_days * 24))
     g = sum(Fp * titre_at(p, k / 24.0, pts) for k in range(n))
@@ -696,7 +912,7 @@ def buffer_L_per_g(p, lot_g=None):
             v = v * (1 + ae.base_frac + ae.nacl_frac) + ae.CV_L * ae.chase_CV * g / cyc_g
             g *= po.aex_yield
         else:
-            cyc_g = max(min(ce.CV_L * ce.DBC_gL, batch * g), 1e-9)
+            cyc_g = max(min(ce.CV_L * ce.DBC_gL * ce.load_util, batch * g), 1e-9)
             d["cex"] += ce.CV_L * (ce.wash_CV + ce.elute_CV + ce.strip_CV + ce.cip_CV + ce.reequil_CV) * g / cyc_g
             d["adjust"] += v * ce.acid_frac
             v = ce.CV_L * ce.eluate_CV * g / cyc_g
@@ -796,7 +1012,7 @@ def profile_design(p):
     pts = profile_points(p)
     target = cyc["target_g"]
     F = up.VVD * br.V_L / 24.0
-    Fr = F * up.tff_retentate_frac
+    Fr = F * cell_out_frac(up)
     Fp = F - Fr
     notes = []
 
@@ -884,6 +1100,20 @@ def profile_design(p):
     if pav_need / max(dp.area_m2, 1e-9) > dp.capacity_Lm2:
         notes.append(f"Depth filter loading {pav_need / max(dp.area_m2, 1e-9):.0f} L/m² exceeds its "
                      f"{dp.capacity_Lm2:.0f} L/m² capacity; use a larger filter.")
+    mu_need = (up.bleed_frac if up.cell_retention else 1.0) * up.VVD / 24.0
+    if mu_need > br.mu_max_h:
+        notes.append(
+            f"Cells must grow at {mu_need:.4f} /h to hold density, above mu_max_h "
+            f"({br.mu_max_h:.4f} /h): the culture would wash out. "
+            + ("Lower the bleed or the perfusion rate." if up.cell_retention else
+               "Without cell retention the whole outflow carries cells out; "
+               "set upstream.cell_retention = True if the TFF returns them."))
+    tff_cap = up.tff_area_m2 * up.tff_capacity_Lm2
+    if tff_cap > 0 and Fp > 0:
+        life_d = tff_cap / (Fp * 24.0)
+        notes.append(f"TFF set life {life_d:.1f} days at {Fp * 24:.0f} L/day "
+                     f"({up.tff_area_m2:g} m² at {up.tff_capacity_Lm2:g} L/m²): "
+                     f"about {max(0, math.ceil(p.run_days / life_d) - 1)} swap(s) in the run.")
     first_buf = daily[min(int(first["n_day"]), len(daily) - 1)]["buffer_L"] if first and daily else None
     peak_buf = max((r["buffer_L"] for r in daily), default=0.0)
     info = ("Downstream runs the Case 5 flowsheet step by step (Brij-9, Protein A, depth filtration, AEX, CEX, "
@@ -910,8 +1140,14 @@ def profile_design(p):
 
 
 def process_design(p):
+    tr = apply_seed_train_to_n1(p)            # seedtrain.apply_to_n1: the N-1 comes from the seed-train design
     d = steady_state_design(p) if p.upstream.mode == "mechanistic" else profile_design(p)
     d["n1"] = n1 = n1_summary(p)
+    if tr is not None:
+        s = tr["stages"][-1]
+        d["notes"].append(f"N-1 is the batch N-1 stage of the seed train ({tr['basis_label']}): {s['V_L']:.1f} L, "
+                          f"{s['duration_d']:.2f} d, {s['x0']:g} → {s['xt']:.2f} ×10⁶/mL; seeds N at "
+                          f"{n1['n_seed_vcd']} ×10⁶/mL.")
     if n1.get("enabled") and n1["reason"] not in ("target reached", "fixed N-1 duration"):
         d["notes"].append(f"N-1: {n1['reason']}. N is seeded at {n1['n_seed_vcd']} ×10⁶/mL after {n1['days']} d "
                           f"(target {p.n1.target_seed_vcd:g}). Raise transfer_L, X_max or max_days.")
@@ -919,7 +1155,7 @@ def process_design(p):
 
 
 def portfolio_sizing(p):
-    names = list(TITRE_PROFILES) + (["custom"] if p.upstream.custom_points else [])
+    names = profile_names(p)
     rows = []
     for name in names:
         q = copy.deepcopy(p)

@@ -10,6 +10,10 @@ Training starts on synthetic runs from icb_dynamic.py across all four
 molecules (the model learns the simulator). Hourly plant data is added with
 fine_tune(); rows need the keys in TITRE_KEYS and WW_KEYS.
 
+Forecast bands are split-conformal 10-90 % intervals from held-out simulator runs
+(train_forecasters(n_val=...)). Fine-tuning keeps the old band: re-run calibrate() on
+plant histories once a few days of plant data are in.
+
 Feature version 3 (IDB, step-by-step Case 5 downstream): older saved weights are
 ignored and retrained.
 
@@ -119,13 +123,39 @@ class Forecaster:
         preds, _, _ = nev.nevai_forward(self.w, self.feature_fn(hist[-SEQ_LEN:], self.scale))
         return np.clip(preds, 0, None) * self.scale
 
+    def calibrate(self, histories, stride=6):
+        """Split-conformal 10-90 % band from runs the model did not train on."""
+        if self.w is None:
+            return None
+        res = []
+        for hist in histories:
+            X, Y = self._windows(hist, stride)
+            for x, y in zip(X, Y):
+                p, _, _ = nev.nevai_forward(self.w, x)
+                res.append(np.asarray(y, dtype=float) - np.clip(np.asarray(p, dtype=float), 0, None))
+        if len(res) < 10:
+            return None
+        R = np.array(res)
+        self.meta["band_q10"] = np.percentile(R, 10, axis=0).round(5).tolist()
+        self.meta["band_q90"] = np.percentile(R, 90, axis=0).round(5).tolist()
+        self.meta["band_windows"] = int(len(R))
+        self.save()
+        return {"windows": int(len(R)), "band": "10-90 %, split-conformal"}
+
     def forecast_band(self, hist, n_samples=30):
         if self.w is None or len(hist) < SEQ_LEN:
             return None
+        q10, q90 = self.meta.get("band_q10"), self.meta.get("band_q90")
+        if q10 and q90 and len(q10) == HORIZON and len(q90) == HORIZON:
+            mean = self.forecast(hist)
+            return {"hours_ahead": list(range(1, HORIZON + 1)), "mean": mean.tolist(),
+                    "p10": np.clip(mean + np.array(q10) * self.scale, 0, None).tolist(),
+                    "p90": np.clip(mean + np.array(q90) * self.scale, 0, None).tolist(),
+                    "note": "split-conformal band from held-out simulator runs"}
         out = nev.predict(self.w, self.feature_fn(hist[-SEQ_LEN:], self.scale), self.scale, n_samples)
         return {"hours_ahead": out["days_ahead"], "mean": out["forecast_gpd"],
                 "p10": out["ci_lo_gpd"], "p90": out["ci_hi_gpd"],
-                "note": "band from weight perturbation, not a calibrated interval"}
+                "note": "band from weight perturbation, not a calibrated interval (retrain to calibrate)"}
 
     def save(self):
         """Write to temporary files, then rename: readers never see half-written weights."""
@@ -178,10 +208,11 @@ class ICBForecasters:
         return {"titre": self.titre.forecast(hist), "ww": self.ww.forecast(hist)}
 
 
-def synthetic_histories(base_params=None, n_runs=4, seed=0, jitter=0.15):
+def synthetic_histories(base_params=None, n_runs=4, seed=0, jitter=0.15, offset=0):
     """Varied simulator runs. IDB mode cycles through the molecules and varies
     curve height, curve speed and feed rate; the legacy model varies growth,
-    productivity, perfusion and fouling. Each run gets one random titre step."""
+    productivity, perfusion and fouling. Each run gets one random titre step.
+    offset shifts the molecule cycle, so validation runs use different molecules."""
     from icb_process import ICBParams, TITRE_PROFILES
     from icb_dynamic import ICBSimulator
     rng = np.random.default_rng(seed)
@@ -196,7 +227,7 @@ def synthetic_histories(base_params=None, n_runs=4, seed=0, jitter=0.15):
             p.control.CSPR_pL_cell_day *= float(rng.uniform(1 - jitter, 1 + jitter))
         else:
             names = list(TITRE_PROFILES) + (["custom"] if p.upstream.custom_points else [])
-            p.upstream.molecule = names[k % len(names)]
+            p.upstream.molecule = names[(k + offset) % len(names)]
             p.upstream.titre_scale *= float(rng.uniform(1 - jitter, 1 + jitter))
             p.upstream.time_stretch *= float(rng.uniform(0.9, 1.1))
             p.upstream.VVD *= float(rng.uniform(1 - jitter, 1 + jitter))
@@ -207,11 +238,16 @@ def synthetic_histories(base_params=None, n_runs=4, seed=0, jitter=0.15):
     return hists
 
 
-def train_forecasters(base_params=None, n_runs=4, epochs=8, stride=12, seed=0):
+def train_forecasters(base_params=None, n_runs=4, epochs=8, stride=12, seed=0, n_val=2):
+    """Train both forecasters, then calibrate their 10-90 % bands on n_val held-out runs."""
     t0 = time.time()
     hists = synthetic_histories(base_params, n_runs, seed)
     fs = ICBForecasters()
     out = {"titre": fs.titre.fit(hists, epochs, stride), "ww": fs.ww.fit(hists, epochs, stride)}
+    if n_val > 0:
+        val = synthetic_histories(base_params, n_val, seed + 1000, offset=n_runs)
+        out["titre_band"] = fs.titre.calibrate(val)
+        out["ww_band"] = fs.ww.calibrate(val)
     out.update({"runs": n_runs, "seconds": round(time.time() - t0, 1)})
     return out
 

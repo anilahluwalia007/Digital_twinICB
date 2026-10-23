@@ -6,12 +6,16 @@ Timeline: N-1 first (permeate to waste), then the N run, then a downstream run-o
 (dsp.tail_h) with the bioreactor stopped so the last product is processed.
 "day" = campaign day; "n_day" = days since N inoculation (negative in N-1).
 
-  N-1 / N + TFF   unchanged (profile = titre curve, mechanistic = legacy ATF model)
+  N-1 / N + TFF   profile = titre curve with TFF cell retention (bleed, falling passage,
+                  set swaps at capacity) or cell removal; mechanistic = legacy ATF model
   Harvest sump    conditioned media surge tank
   Downstream      icb_dsp.DSP: every step of the Case 5 flowsheet, in sequence
   Low-pH VI       legacy option (vi.mode = "low_ph"), between Protein A and depth filtration
   PCC             legacy option (capture.mode = "pcc"), Protein A steps lumped per cycle
-  NevAI           optional, advisory: 24 h titre forecast -> grams -> solutions
+  NevAI           optional: advisory by default; with control.nevai_act it may start an early partial
+                  Protein A load (icb_nevai_ops.py); the watch flags titre drifting from the forecast
+  Biology         icb_bio.bio_design: Bio_sim cell model, seed train N-3 -> N, Demand sizing
+                  (result["bio"]); with seedtrain.apply_to_n1 the N-1 runs as a batch stage
 
 Quick check:  python3 icb_dynamic.py
 """
@@ -21,8 +25,11 @@ import math
 from collections import deque
 import numpy as np
 from icb_process import (ICBParams, WASTE_STREAMS, BUFFER_OPS, SOLUTIONS, SOLUTION_ALIASES,
-                         process_design, capture_cycle, buffer_L_per_g, titre_at, profile_points, det_frac)
+                         process_design, capture_cycle, buffer_L_per_g, titre_at, profile_points, det_frac,
+                         cell_out_frac)
 from icb_dsp import DSP, Plant, Vessel, FLOW_KEYS, VESSEL_KEYS, LANE_KEYS, WFI_KEYS
+from icb_bio import bio_design
+from icb_nevai_ops import HoldGuard, Watch, report as nevai_report
 
 _BASE_KEYS = ["h", "day", "n_day", "phase", "X_n1", "Xv", "Xv_meas", "viability", "S",
               "titre_harvest", "titre_meas", "sieve", "VVD", "Fb_Lh", "Fh_Lh",
@@ -30,7 +37,7 @@ _BASE_KEYS = ["h", "day", "n_day", "phase", "X_n1", "Xv", "Xv_meas", "viability"
               "eluate_surge_L", "F_vi_Lh", "vi_pH", "acid_frac",
               "harvest_g_h", "ds_g_cum", "buffer_L_h", "ww_total_Lh",
               "titre_fc_24h", "switch_fc_h", "ww_fc_24h_L", "g_fc_24h", "buffer_fc_24h_L",
-              "g_next24", "buffer_next24_L"]
+              "g_next24", "buffer_next24_L", "nevai_watch"]
 SERIES_KEYS = list(dict.fromkeys(
     _BASE_KEYS + ["Fin_Lh", "capture_switch", "ds_g_h", "usp_on", "det_Lh", "ds_L_cum"]
     + list(FLOW_KEYS) + list(VESSEL_KEYS) + list(LANE_KEYS) + list(WFI_KEYS)
@@ -104,7 +111,8 @@ class ICBSimulator:
 
         X1 = n1.X0
         Xv, Xd, S, P = n1s["n_seed_vcd"], 0.0, br.S0_gL, 0.0
-        sieve, dev = br.sieving0, 0.0
+        sieve, dev = (up.sieve0 if profile else br.sieving0), 0.0
+        tff_used, tff_swaps = 0.0, 0           # permeate through the current TFF set (profile mode)
         sig = up.variation_sigma if profile else br.qp_ou_sigma
         tau = max(up.variation_tau_h if profile else br.qp_ou_tau_h, 1e-6)
         swap_left, atf_swaps = 0, 0
@@ -153,6 +161,8 @@ class ICBSimulator:
         ww_sum = {k: 0.0 for k in WASTE_STREAMS}
         buf = led.buf
         history, fc_log = [], []
+        guard = HoldGuard(ct, cp, target) if (self.fc is not None and batch) else None
+        watch = Watch(ct) if self.fc is not None else None
 
         def pcc_elute(h, bound):
             dsp.pav.add(cyc["eluate_L"], bound * cyc["yield"], h + 1.0)
@@ -200,6 +210,8 @@ class ICBSimulator:
                     event(h, "inoculate", f"N inoculated at {n1s['n_seed_vcd']:.2f} ×10⁶ cells/mL"
                           + (f" from N-1 at {X1:.1f} ×10⁶/mL after {n1s['days']} d ({n1s['reason']})"
                              if n1.enabled else ""))
+                    if n1.enabled and n1.VVD <= 0:          # batch N-1 from the seed train: its medium
+                        media_L += n1.V_L
                 if n_h == HN and HT > 0:
                     event(h, "run_out", "N run ended; downstream runs out the remaining product")
                 if usp_on:
@@ -207,15 +219,32 @@ class ICBSimulator:
                     dev += -dev / tau + sig * math.sqrt(2.0 / tau) * rng.normal()
                     if profile:
                         Fin = up.VVD * V / 24.0
-                        Fb = Fin * up.tff_retentate_frac
+                        Fb = Fin * cell_out_frac(up)
                         Fh = Fin - Fb
-                        c = titre_at(p, n_day + 0.5 / 24.0, pts) * qp_f * math.exp(dev)
-                        titre_h = c
-                        harv_g = Fh * c
-                        produced_g += Fin * c
+                        cap_L = up.tff_area_m2 * up.tff_capacity_Lm2
+                        if cap_L > 0 and tff_used >= cap_L:
+                            tff_used, tff_swaps = 0.0, tff_swaps + 1
+                            sieve = up.sieve0
+                            ww["tff_swap_flush"] += up.tff_swap_flush_L
+                            event(h, "tff_swap",
+                                  f"TFF set swapped and regenerated (swap {tff_swaps}); "
+                                  f"permeate continues on the fresh set")
+                        sieve = max(0.0, sieve - up.sieve_loss_per_day / 24.0)
+                        # the titre curve is the permeate titre; with cell retention the reactor sits above it
+                        c_perm = titre_at(p, n_day + 0.5 / 24.0, pts) * qp_f * math.exp(dev)
+                        c_reactor = c_perm / max(sieve, 1e-6) if up.cell_retention else c_perm
+                        titre_h = c_perm
+                        harv_g = Fh * c_perm
+                        out_g = Fb * c_reactor
+                        produced_g += harv_g + out_g
                         media_L += Fin
-                        ww["tff_retentate"] += Fb
-                        loss["tff_retentate"] += Fb * c
+                        tff_used += Fh
+                        if up.cell_retention:
+                            ww["cell_bleed"] += Fb
+                            loss["cell_bleed"] += out_g
+                        else:
+                            ww["tff_retentate"] += Fb
+                            loss["tff_retentate"] += out_g
                     else:
                         qP = br.qP_pg_cell_h * qp_f * math.exp(dev)
                         Xv_m = max(0.0, Xv * (1 + vcd_bias + pat.vcd_noise * rng.normal()))
@@ -433,6 +462,12 @@ class ICBSimulator:
                         wait_h += 1
                     col = 1 if loading else (2 if dsp.pa.busy() else 0)
 
+            # ── NevAI watch: measured titre against the forecast issued lead_h earlier ──
+            w_score = watch.score(h, titre_m) if (watch is not None and usp_on) else None
+            if watch is not None and watch.flag(h, w_score):
+                alarm(h, "nevai_watch", f"Permeate titre is {100 * w_score:.0f} % off the NevAI forecast "
+                      f"trend: check the PAT sensor, the culture and the TFF")
+
             # ── record ──
             ww_h = sum(ww.values())
             for k, v in ww.items():
@@ -443,7 +478,7 @@ class ICBSimulator:
                 "usp_on": int(usp_on),
                 "X_n1": None if in_n else X1,
                 "Xv": Xv if mech else None, "Xv_meas": Xv_m, "viability": viab,
-                "S": S if mech else None, "sieve": sieve if mech else None,
+                "S": S if mech else None, "sieve": sieve if (mech or (profile and usp_on)) else None,
                 "titre_harvest": titre_h, "titre_meas": titre_m,
                 "Fin_Lh": Fin, "Fb_Lh": Fb, "Fh_Lh": Fh, "VVD": Fin * 24.0 / V,
                 "bleed_frac": Fb / Fin if Fin > 0 else 0.0, "bleed_on": int(bleed_on),
@@ -454,9 +489,10 @@ class ICBSimulator:
                 "harvest_g_h": harv_g, "ds_g_h": pl.flow["ds_g"], "ds_g_cum": pl.ds_g, "ds_L_cum": pl.ds_L,
                 "buffer_L_h": sum(buf.values()) - sum(buf0.values()),
                 "ww_total_Lh": ww_h,
-                "ww_cells_Lh": ww["cell_bleed"] + ww["tff_retentate"] + ww["atf_flush"],
+                "ww_cells_Lh": ww["cell_bleed"] + ww["tff_retentate"] + ww["atf_flush"] + ww["tff_swap_flush"],
                 "titre_fc_24h": None, "switch_fc_h": None, "ww_fc_24h_L": None,
                 "g_fc_24h": None, "buffer_fc_24h_L": None,
+                "nevai_watch": w_score,
             }
             rec.update(pl.flow)
             rec.update(dsp.levels())
@@ -468,7 +504,7 @@ class ICBSimulator:
                 rec["ww_" + k] = v
             history.append(rec)
 
-            # ── NevAI forecasts (advisory) ──
+            # ── NevAI forecasts (advisory; the hold guard acts only with control.nevai_act) ──
             if (self.fc is not None and usp_on and h % self.fc_every == 0
                     and len(history) >= self.fc.seq_len):
                 f = self.fc.forecast_all(history)
@@ -489,6 +525,18 @@ class ICBSimulator:
                     if titre_m and titre_m > 0.05 and tf[-1] < (1 - ct.titre_drop_alarm) * titre_m:
                         alarm(h, "fc_titre_drop",
                               f"NevAI forecasts permeate titre falling to {float(tf[-1]):.2f} g/L within {len(tf)} h")
+                    if watch is not None:
+                        watch.issue(h, tf)
+                    if guard is not None and guard.on and capturing and not pl.fc_partial:
+                        loading = any(tr.load is not None for tr in dsp.pa.trains)
+                        g_meas = dsp.pa._noisy() * sump.L
+                        if guard.check(rec["switch_fc_h"], sump.L, g_meas, Fh, loading):
+                            pl.fc_partial = True
+                            wait = rec["switch_fc_h"]
+                            event(h, "nevai_partial",
+                                  f"NevAI: a full load is {'about ' + str(wait) if wait else 'more than 24'} h away "
+                                  f"and the product would pass the {cp.max_sump_hold_h:.0f} h hold limit; "
+                                  f"requesting a partial Protein A load of about {g_meas:.0f} g")
                 if wf is not None:
                     rec["ww_fc_24h_L"] = float(np.sum(wf))
 
@@ -507,7 +555,8 @@ class ICBSimulator:
                         + (P * V if not profile else 0.0))
         st = dict(pl=pl, dsp=dsp, produced_g=produced_g, media_L=media_L, loss=loss, ww_sum=ww_sum,
                   events=events, alarms=alarms, alarm_hours=alarm_hours, wait_h=wait_h,
-                  atf_swaps=atf_swaps, fc_log=fc_log, cyc=cyc, per_g=per_g, n1s=n1s, in_process_g=in_process_g)
+                  atf_swaps=atf_swaps, tff_swaps=tff_swaps, fc_log=fc_log, cyc=cyc, per_g=per_g, n1s=n1s, in_process_g=in_process_g,
+                  watch=watch, H1=H1)
         return self._summarise(p, design, H, history, keep_history, downsample_h, st)
 
     def _summarise(self, p, design, H, history, keep_history, downsample_h, st):
@@ -587,6 +636,7 @@ class ICBSimulator:
             "n1_seed_vcd": st["n1s"]["n_seed_vcd"],
             "n1_days": st["n1s"].get("days"),
             "n1_waste_m3": round(ww_sum["n1_permeate"] / 1000, 3),
+            "n1_media_m3": round((st["n1s"].get("media_L") or 0.0) / 1000, 3),
             "media_used_m3": round(media_L / 1000, 2),
             "media_m3_per_kg_ds": round(media_L / ds_g, 2) if ds_g > 0 else None,
             "final_titre_gL": round(last_t, 3) if last_t is not None else None,
@@ -611,6 +661,8 @@ class ICBSimulator:
             "containers": pl.containers,
             "in_process_end_g": round(st["in_process_g"], 1),
             "atf_swaps": st["atf_swaps"],
+            "tff_swaps": st["tff_swaps"],
+            "prefilters": int(math.ceil(p.run_days) * p.polish.prefilter_per_day),
             "wastewater_m3": round(ww_total / 1000, 2),
             "wastewater_m3_per_kg_ds": round(ww_total / ds_g, 2) if ds_g > 0 else None,
             "ww_daily_avg_m3": round(float(np.mean(cap_days)) / 1000, 3),
@@ -625,6 +677,12 @@ class ICBSimulator:
             "nevai_switch_forecast_mae_h": round(float(np.mean(errs)), 2) if errs else None,
             "nevai_buffer_forecast_mape_pct": round(100 * float(np.mean(mape)), 1) if mape else None,
         }
+        w = st["watch"]
+        kpi["nevai_partial_loads"] = pl.partial_loads
+        kpi["nevai_watch_flags"] = w.flag_hours if w else None
+        kpi["nevai_watch_first_flag_n_day"] = (round((w.first_flag_h - st["H1"]) / 24.0, 2)
+                                              if w and w.first_flag_h is not None else None)
+        kpi["nevai_watch_peak_score"] = round(w.peak, 3) if w else None
         step = max(1, int(downsample_h))
         labels = {k: v["label"] for k, v in SOLUTIONS.items()}
         labels.update(SOLUTION_ALIASES)
@@ -647,6 +705,13 @@ class ICBSimulator:
             "series": [{k: _rnd(r.get(k)) for k in SERIES_KEYS} for r in history[::step]],
             "events": st["events"][:300],
         }
+        out["nevai"] = nevai_report(p, self.fc is not None, pl.partial_loads, w, st["H1"], history)
+        try:                                              # biology model, seed train, demand (icb_bio.py)
+            out["bio"] = bio_design(p)
+            kpi["seed_train_days"] = round(out["bio"]["seed_train"]["timeline"]["vial_to_harvest_d"], 1)
+            kpi["bio_titre_gL"] = round(out["bio"]["bio"]["results"]["final_titre_gL"], 3)
+        except Exception as e:                            # the biology view must never break a run
+            out["bio"] = {"error": f"biology model failed: {e}"}
         from icb_sizing import size_equipment            # here to avoid a circular import
         try:
             out["sizing"] = size_equipment(p, out, history, led.sol_day)

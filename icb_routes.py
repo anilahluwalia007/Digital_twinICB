@@ -15,6 +15,8 @@ NavNevAI_mAbWasteWater · CarbonTesseract 2026
   GET  /api/icb/nevai/status    model state, weights on disk, training state, why_off
   POST /api/icb/nevai/train     start background training (returns immediately)
   POST /api/icb/nevai/ingest    hourly plant rows -> fine-tune both forecasters
+  POST /api/icb/nevai/benefit   run the case advisory and acting (control.nevai_act), same seed:
+                                {"params", "seed", "case"} -> rows of KPIs and alarms side by side
 
 A case is applied on top of the posted parameters (icb_cases.apply_case); the run returns
 result["case"] = {"info": what the case changed, "annual": per-year totals, occupancy and checks}.
@@ -300,6 +302,7 @@ def register_icb_routes(app, login_required=None):
             "n_runs": max(2, min(int(body.get("n_runs", 4)), 8)),
             "epochs": max(3, min(int(body.get("epochs", 8)), 40)),
             "stride": max(2, int(body.get("stride", 12))),
+            "n_val": max(0, min(int(body.get("n_val", 2)), 4)),      # held-out runs for the bands
         }
         started = _start_training(kwargs)
         return jsonify({"ok": True, "started": started, "training": dict(_TRAIN)})
@@ -319,6 +322,41 @@ def register_icb_routes(app, login_required=None):
                             "required_keys": sorted(set(icb_nevai.TITRE_KEYS + icb_nevai.WW_KEYS))})
         except Exception as e:
             app.logger.exception("icb nevai ingest error")
+            return jsonify({"ok": False, "error": str(e)}), 400
+
+    BENEFIT_ROWS = (("first_cycle_n_day", "First Protein A cycle (N day)"),
+                    ("nevai_partial_loads", "Early partial loads started by NevAI"),
+                    ("capture_cycles", "Protein A cycles"),
+                    ("capture_wait_h", "Hours a full load waited for a column"),
+                    ("buffer_m3", "Solutions incl. WFI (m³)"),
+                    ("buffer_daily_peak_L", "Peak solution day (L)"),
+                    ("ww_daily_peak_m3", "Peak wastewater day (m³)"),
+                    ("drug_substance_kg", "Drug substance (kg)"),
+                    ("overall_yield_pct", "Overall yield (%)"))
+    ALARM_ROWS = (("sump_hold", "Hours over the surge-tank hold limit"),
+                  ("sump_overflow", "Hours of surge-tank overflow"),
+                  ("capture_overload", "Overloaded Protein A cycles"))
+
+    @app.route("/api/icb/nevai/benefit", methods=["POST"])
+    @_guard
+    def icb_nevai_benefit():
+        try:
+            body = request.get_json(force=True) or {}
+            fs, why = _forecaster_or_reason(True)
+            if fs is None:
+                return jsonify({"ok": False, "error": "NevAI not available: " + why}), 400
+            seed, runs = int(body.get("seed", 0)), {}
+            for act in (False, True):
+                p, _, _ = _case_params(body)
+                p.control.nevai_act = act
+                runs[act] = ICBSimulator(p, forecaster=fs, seed=seed).run()
+            k0, k1 = runs[False]["kpi"], runs[True]["kpi"]
+            rows = [{"label": lab, "advisory": k0.get(k), "acting": k1.get(k)} for k, lab in BENEFIT_ROWS]
+            rows += [{"label": lab, "advisory": (k0.get("alarms") or {}).get(a, 0),
+                      "acting": (k1.get("alarms") or {}).get(a, 0)} for a, lab in ALARM_ROWS]
+            return jsonify({"ok": True, "rows": rows, "nevai": runs[True].get("nevai")})
+        except Exception as e:
+            app.logger.exception("icb nevai benefit error")
             return jsonify({"ok": False, "error": str(e)}), 400
 
     if _LOCKFILE.exists() and not _lock_held():          # clear a lock left by a dead worker

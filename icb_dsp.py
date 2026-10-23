@@ -20,11 +20,15 @@ Vessels sit between units; a unit starts when its trigger is met.
              -> formulation spike -> transfer to BDS mixer -> flush -> CIP -> rinse -> storage
   BDS        mix -> flush 0.2 um filter -> fill cryovault containers
 
+Protein A also accepts an early partial load when NevAI asks for one (plant.fc_partial,
+set by icb_nevai_ops.HoldGuard with control.nevai_act); its PAT reading has its own noise.
+
 Each hour is split into SLICES so short steps keep their own start and end times
 in the step log (result["steps"]) used by the diagram and the films.
 """
 from __future__ import annotations
 import math
+import numpy as np
 from icb_process import BUFFER_OPS, DILUTIONS, SOLUTIONS, capture_cycle, det_frac
 
 EPS_G, EPS_L = 1e-3, 1e-4
@@ -118,6 +122,7 @@ class Plant:
         self.depth_filters = self.vf_changes = self.containers = 0
         self.lots, self.pending_lot = [], None
         self.ds_g = self.ds_L = 0.0
+        self.fc_partial, self.partial_loads = False, 0     # NevAI early partial Protein A load
 
     def lose(self, key, g):
         if g > 0.0:
@@ -324,6 +329,9 @@ class ProteinA(Unit):
         self.CV, self.dose = self.cyc["CV_L"], det_frac(p)
         self.f = self.cp.recovery_flow_CVh * self.CV
         self._eps_h, self._eps = None, 0.0
+        # own PAT noise, seeded per hour: the reading for an hour is the same however often it is
+        # taken, so an early NevAI load never shifts the plant's other random streams
+        self._pseed = int(plant.rng.integers(2 ** 31))
 
     def startup(self):
         c, V, f = self.cp, self.CV, self.f
@@ -355,7 +363,7 @@ class ProteinA(Unit):
         if f.L <= EPS_L:
             return 0.0
         if self._eps_h != pl.h:
-            self._eps_h, self._eps = pl.h, pl.rng.normal()
+            self._eps_h, self._eps = pl.h, float(np.random.default_rng((self._pseed, int(pl.h))).normal())
         return max(0.0, f.g / f.L * (1 + pl.p.pat.titre_noise * self._eps))
 
     def trigger(self, t):
@@ -364,12 +372,23 @@ class ProteinA(Unit):
         if self.force:
             return self.feed.g > EPS_G
         c = self._noisy()
-        return c > 1e-9 and c * self.feed.L >= self.cyc["target_g"]
+        if c <= 1e-9:
+            return False
+        if c * self.feed.L >= self.cyc["target_g"]:
+            return True
+        return (self.pl.fc_partial and                         # NevAI asked for an early partial load
+                c * self.feed.L >= self.pl.p.control.nevai_partial_min_frac * self.cyc["target_g"])
 
     def begin_load(self, tr, t):
         pl, f = self.pl, self.feed
         c = 0.0 if self.force else self._noisy()
         left = min(f.L, self.cyc["target_g"] / c) if c > 1e-9 else f.L
+        if pl.fc_partial and not self.force:
+            pl.fc_partial = False
+            if c * f.L < self.cyc["target_g"]:
+                pl.partial_loads += 1
+                pl.event(pl.h, "nevai_partial_load", f"NevAI partial Protein A load started: about "
+                                                     f"{c * f.L:.0f} g of a {self.cyc['target_g']:.0f} g target")
         tr.load = {"left": left, "det": 0.0}
         tr.bound = 0.0
         if pl.first_cycle is None:

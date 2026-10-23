@@ -68,6 +68,26 @@ image. Replace both with site data before relying on absolute numbers.
 Optional: `python3 icb_nevai.py train` retrains NevAI (8 runs × 30 epochs, about
 2 minutes) and overwrites the weights in `data/icb/`. NevAI is trained on the base
 curves; forecasts for strongly scaled cases (e.g. Case 5) are extrapolations.
+Training also calibrates split-conformal 10–90 % forecast bands on two held-out runs.
+
+## NevAI in operation
+
+NevAI is advisory by default. Set `control.nevai_act` to let it start an early partial
+Protein A load when the forecast says the surge-tank product would pass
+`max_sump_hold_h` (minus `nevai_hold_margin_h`) before a full load is ready; the
+smallest partial load is `nevai_partial_min_frac` of a full one.
+
+The watch compares each measured permeate titre with the forecast issued
+`nevai_watch_lead_h` earlier and raises the `nevai_watch` alarm when the forecast
+error shifts by more than `nevai_watch_threshold`. Calibrate the threshold from a run
+without disturbances: set it to about 1.5 × the reported `nevai_watch_peak_score`.
+The flag also shows in the PFD readout and in the start-up film.
+
+The NevAI card on the Outputs tab compares buffer preparation driven by the 24 h
+forecast with a reactive rule (prepare what was used in the last 24 h), at the same
+preparation capacity (`buffer_prep_Lh`, 0 = peak day ÷ 20 h). **Measure NevAI benefit**
+runs the selected case advisory and acting with the same seed and tables the difference.
+Retrain once after this update to get calibrated bands; existing weights keep working.
 
 Port 8000 is used because macOS reserves 5000 for AirPlay.
 
@@ -90,7 +110,7 @@ with Cmd + Shift + .) or:
     git remote add origin https://github.com/YOUR-USER/icb-mab-twin.git
     git push -u origin main
 
-Check the repository shows `app.py`, `icb_cases.py`, `icb_routes.py`, `icb_dsp.py`,
+Check the repository shows `app.py`, `icb_cases.py`, `icb_routes.py`, `icb_dsp.py`, `icb_nevai_ops.py`,
 `icb_sizing.py`, `render.yaml`, `requirements.txt`, `templates/index.html`,
 `static/chart.umd.js`, `static/pfd.js`, `static/pfdvideo.js`, `static/seqfilm.js`
 and `data/icb/` with four files.
@@ -120,6 +140,7 @@ in `data/icb/` are always there).
     GET  /api/icb/nevai/status    model and training state
     POST /api/icb/nevai/train     start background training
     POST /api/icb/nevai/ingest    hourly plant rows -> fine-tune
+    POST /api/icb/nevai/benefit   same case advisory vs acting (control.nevai_act), same seed
 
 A run with a case returns `case.info` (what the case changed) and `case.annual`
 (per-year totals, occupancy, checks against the case values).
@@ -132,7 +153,8 @@ A run with a case returns `case.info` (what the case changed) and `case.annual`
 - `icb_dsp.py` — step-by-step downstream: every unit as a recipe of steps
 - `icb_sizing.py` — equipment sizing from the hourly run
 - `icb_dynamic.py` — hour-by-hour simulation
-- `icb_nevai.py`, `nevai_engine.py` — NevAI forecasters
+- `icb_nevai.py`, `nevai_engine.py` — NevAI forecasters and calibrated bands
+- `icb_nevai_ops.py` — NevAI in operation: hold guard, drift watch, buffer-preparation comparison
 - `icb_routes.py` — API routes; background training
 - `app.py` — web app entry point; login and sessions
 - `templates/index.html` — tabbed dashboard and PDF report
