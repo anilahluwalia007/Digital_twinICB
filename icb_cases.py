@@ -7,7 +7,7 @@ NavNevAI_mAbWasteWater · CarbonTesseract 2026
   1  Design Case: High Yield/Volume      3.0          20       71 %       80
   2  Design Case: Turndown Volume        3.0           3        –          –
   3  Design Case: Low Yield/Volume       0.4           3       25 %       35
-  4  Rating Case: Rilveg                 0.6          20        –          –
+  4  Rating Case: Rilveg                 0.6          20       71 %        –
   5  Scenario Case: High-High Yield      4.8          20       71 %        –
 
 Cases 1–3 bracket the operating range every item of equipment must handle; the design case is their
@@ -19,20 +19,27 @@ How a case changes a run (applied on top of the Inputs, at run time):
   titre    the chosen titre-curve shape is scaled (upstream.titre_scale) so its run average equals the
            case value. Basis "productivity" (default): g made per L of N working volume per day
            = mean permeate titre × VVD. Basis "titre": mean permeate titre in g/L.
-  shape    "auto" picks the Figure 2 curve whose own average is nearest the target (least scaling).
+  shape    "auto" picks the Figure 2 curve whose own average is nearest the target (least scaling);
+           "biology" uses the Bio_sim curve from icb_bio.py (fed-batch titre or perfusion qP·Xv/VVD).
   yield    harvest-to-DS train yield (Protein A → fill): every step yield is scaled by one factor.
   load     Protein A load in g per L resin: DBC_gL = load / load_util; the column volume
            (column_capacity_g / DBC_gL from the Inputs) is kept, so the grams per cycle follow.
   batches  per-year totals = one simulated batch × batches per year; reactor and downstream lines
            from occupancy (days per batch + turnaround) against the operating days per year.
 Blank cells: Cases 2 and 5 inherit yield and load from Case 1 (the same process at another volume or
-titre); Case 4 keeps the Inputs values. Every value can be edited on the Cases tab.
+titre); Case 4 keeps the load of its recipe set. Every value can be edited on the Cases tab.
+  recipe   Case 4 first loads the Rilveg 2936 recipe set (icb_rilveg.py: reactor, TFF, LambdaFabSelect
+           capture, polishing and UF/DF solutions); the titre, yield and load locks then act on it.
+  titrants every case sizes the in-line Tris base before AEX and acetic acid before CEX from the pH
+           each step has to reach (icb_process.titrant_plan); confirm both by titration.
+Case 4 yield 71 % = the three yields the map states (0.80 × 0.97 × 0.92 = 0.713); lower it once the
+depth-filter, virus-filter and UF/DF losses are measured.
 """
 from __future__ import annotations
 import copy
 import math
-from icb_process import (TITRE_PROFILES, profile_points, profile_label, titre_at, train_yield,
-                         capture_cycle, process_design)
+from icb_process import (TITRE_PROFILES, EXTRA_PROFILES, profile_points, profile_label, titre_at, train_yield,
+                         capture_cycle, process_design, titrant_plan)
 
 VALUE_KEYS = ("avg_titre_gLd", "batches_per_year", "yield_est", "capture_load_gL")
 CASES = {
@@ -43,18 +50,20 @@ CASES = {
     "3": {"name": "Design Case: Low Yield/Volume", "short": "Low Yield/Volume", "kind": "design",
           "avg_titre_gLd": 0.4, "batches_per_year": 3.0, "yield_est": 0.25, "capture_load_gL": 35.0},
     "4": {"name": "Rating Case: Rilveg", "short": "Rilveg", "kind": "rating",
-          "avg_titre_gLd": 0.6, "batches_per_year": 20.0, "yield_est": None, "capture_load_gL": None},
+          "avg_titre_gLd": 0.6, "batches_per_year": 20.0, "yield_est": 0.71, "capture_load_gL": None},
     "5": {"name": "Scenario Case: High-High Yield", "short": "High-High Yield", "kind": "scenario",
           "avg_titre_gLd": 4.8, "batches_per_year": 20.0, "yield_est": 0.71, "capture_load_gL": None},
 }
 INHERIT = {"2": "1", "5": "1"}            # blank yield / load taken from this case
+RECIPES = {"4": "rilveg"}                 # case id -> molecule recipe set
 DESIGN_CASES = ("1", "2", "3")
 KIND_LABEL = {"design": "Design case", "rating": "Rating case", "scenario": "Scenario case"}
 PURPOSE = {
     "1": "Design case: high titre at high volume. With Cases 2 and 3 it brackets the range every item must handle.",
     "2": "Design case: same titre as Case 1 at turndown volume (3 batches a year).",
     "3": "Design case: low titre, low yield and low volume; the low end of the operating range.",
-    "4": "Rating case: the lead pipeline molecule Rilveg, simulated for detailed cost of goods.",
+    "4": "Rating case: the lead pipeline molecule Rilveg, simulated for detailed cost of goods "
+         "with its own recipe set (Rilveg 2936 map).",
     "5": "Scenario case above the design case: simulate, scope the incremental capital against Case 1, "
          "and SteerCo decides whether Case 5 replaces Case 1 as the high design case.",
 }
@@ -63,7 +72,7 @@ NOTE_1 = ("Note 1: Case 5 is simulated and a feasibility-level scope developed t
           "Concept Design to decide whether Case 5 is kept as the design basis or dropped.")
 SETTINGS = {
     "titre_basis": "productivity",   # "productivity" (g/L reactor/day) or "titre" (mean permeate g/L)
-    "shape": "auto",                 # "auto", a TITRE_PROFILES key, or "custom"
+    "shape": "auto",                 # "auto", a TITRE_PROFILES key, "biology" or "custom"
     "lock_titre": True,
     "lock_yield": True,
     "lock_load": True,
@@ -76,7 +85,7 @@ YMIN, YMAX = 0.01, 0.999
 KPI_KEYS = ("drug_substance_kg", "product_made_kg", "overall_yield_pct", "final_titre_gL", "first_cycle_n_day",
             "capture_cycles", "peak_cycles_day", "capture_wait_h", "buffer_m3", "buffer_L_per_g_ds",
             "buffer_daily_peak_L", "wfi_m3", "wastewater_m3", "wastewater_m3_per_kg_ds", "ww_daily_peak_m3",
-            "depth_filters", "vf_changes", "lots", "containers", "in_process_end_g", "n1_days")
+            "depth_filters", "vf_changes", "tff_swaps", "lots", "containers", "in_process_end_g", "n1_days")
 ANNUAL_ROWS = (("drug_substance_kg", "Drug substance", "kg"),
                ("product_made_kg", "Product made in the N reactor", "kg"),
                ("media_used_m3", "Media (N-1 + N)", "m³"),
@@ -87,6 +96,8 @@ ANNUAL_ROWS = (("drug_substance_kg", "Drug substance", "kg"),
                ("capture_cycles", "Protein A cycles", "cycles"),
                ("depth_filters", "Depth filters", "filters"),
                ("vf_changes", "Virus filter changes", "changes"),
+               ("prefilters", "0.2 um prefilters before the virus filter", "filters"),
+               ("tff_swaps", "TFF set swaps", "swaps"),
                ("lots", "Lots", "lots"),
                ("containers", "Cryovault containers", "containers"))
 SKIP_UNITS = {"cm", "cm/h", "cycles", "filters", "containers"}   # not capacity items in the increment
@@ -256,6 +267,13 @@ def apply_case(p, case):
         setattr(obj, key, val)
         changes.append({"param": f"{sec}.{key}", "inputs": _r(old), "case": _r(val), "why": why})
 
+    recipe = RECIPES.get(cid)
+    if recipe == "rilveg":
+        from icb_rilveg import apply_rilveg          # here to avoid a circular import
+        apply_rilveg(p, verbose=False)
+        changes.append({"param": "recipe", "inputs": "platform", "case": "rilveg",
+                        "why": "Case 4 runs the Rilveg 2936 recipe set (icb_rilveg.py)"})
+
     if p.upstream.mode != "profile":
         setp("upstream", "mode", "profile", "the cases are IDB titre-curve runs")
     basis, target = st["titre_basis"], spec["avg_titre_gLd"]
@@ -264,7 +282,7 @@ def apply_case(p, case):
         shape = "auto"
     if shape == "auto":
         shape = _pick_shape(p, target, basis) if target else p.upstream.molecule
-    if shape != "custom" and shape not in TITRE_PROFILES:
+    if shape not in ("custom", "biology") and shape not in TITRE_PROFILES:
         shape = "purple"
     setp("upstream", "molecule", shape, "titre-curve shape for this case")
     curve = _basis_value(p, basis)
@@ -290,6 +308,11 @@ def apply_case(p, case):
             dbc = load / max(p.capture.load_util, 1e-9)
             setp("capture", "DBC_gL", dbc, f"load {load:g} g/L resin = DBC × load_util ({p.capture.load_util:g})")
             setp("capture", "column_capacity_g", dbc * cv, f"column volume kept at {cv:.2f} L per train")
+    tt = titrant_plan(p)
+    setp("aex", "base_frac", tt["base_frac"],
+         f"2 M Tris base to take the eluate from pH {p.capture.elute_pH:g} to 7.4 (buffer only; confirm by titration)")
+    setp("cex", "acid_frac", tt["acid_frac"],
+         f"1 M acetic acid to take the AEX pool from pH 7.4 to {p.cex.load_pH:g} (buffer only; confirm by titration)")
     lnow, cv_now = _load_now(p)
     return {"id": cid, "name": spec["name"], "short": spec["short"], "kind": spec["kind"],
             "kind_label": KIND_LABEL[spec["kind"]], "purpose": PURPOSE[cid],
@@ -401,10 +424,11 @@ def annual(p, res, info):
 
 # ── all cases ────────────────────────────────────────────────────────
 def case_api_info():
-    return {"cases": {cid: dict(c, id=cid, purpose=PURPOSE[cid], inherit=INHERIT.get(cid))
+    return {"cases": {cid: dict(c, id=cid, purpose=PURPOSE[cid], inherit=INHERIT.get(cid),
+                                recipe=RECIPES.get(cid))
                       for cid, c in CASES.items()},
             "order": list(CASES), "design_cases": list(DESIGN_CASES), "settings": SETTINGS,
-            "shapes": {k: v["label"] for k, v in TITRE_PROFILES.items()}, "note1": NOTE_1,
+            "shapes": dict({k: v["label"] for k, v in TITRE_PROFILES.items()}, **EXTRA_PROFILES), "note1": NOTE_1,
             "kind_labels": KIND_LABEL, "basis_units": BASIS_UNIT}
 
 
