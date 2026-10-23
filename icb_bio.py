@@ -3,22 +3,33 @@ icb_bio.py — cell biology, seed train (N-3 → N) and production-reactor sizin
 NavNevAI_mAbWasteWater · CarbonTesseract 2026
 
 Port of CHO_mAb_Process_Calculator5.xlsx (same equations, same default values):
-  Bio_inputs / Bio_sim / Bio_curve  bio_run(p)          fed-batch cell model, Euler steps of bio.dt_d
-  Seed_sim                          seed_sim(b, X0, d)  batch stage at 37 °C in fresh medium, same biology
+  Bio_inputs / Bio_sim / Bio_curve  bio_run(p)          N cell model, Euler steps of bio.dt_d
+  Seed_sim                          seed_sim(b, X0, d)  one seed stage at 37 °C, same biology
   Seed_train                        seed_train(p)       N-3, N-2, N-1 and N back to the vial
-  Demand                            demand(p)           N size from annual demand and the cell model's titre
+  Demand                            demand(p)           N size from annual demand and the cell model
+
+Culture mode per stage (culture.preset; preset "custom" reads culture.mode_n3 .. mode_n):
+  batch      no feed, nothing leaves (the workbook's seed stages)
+  fedbatch   concentrated feed from bio.feed_start_d, volume grows (the workbook's N)
+  perfusion  constant volume: fresh medium in, cell-free permeate out through a retention device
+             whose product passage falls as it fouls (swapped below a limit); on N a cell bleed
+             holds culture.perf_X_setpoint; optional loss of productivity per generation or day
+  presets    workbook (default)  N-3/N-2/N-1 batch, N fed-batch: identical to the workbook
+             fb_all              every stage fed-batch
+             fb_n1_perf_n        N-3/N-2 batch, N-1 fed-batch, N perfusion
+             perf_all            every stage perfusion
+The perfusion model is not in the workbook: its defaults are typical values, not site data.
 
 Basis switches (workbook Seed_train B6 / B7), each "biology" or "rule":
   seedtrain.duration_basis  stage durations from Seed_sim (lag, nutrients, waste) or ln(fold) / mu_rule_d
   seedtrain.density_basis   transfer where net growth falls to growth_threshold_pct of its peak
                             (late exponential phase) or the fixed xt_rule_* densities
-Both "biology" = pure biology; mixed = biology + rules of thumb; both "rule" = rules of thumb only.
 Rules of thumb used whatever the basis (as in the workbook README): seed densities, the growth
 threshold, qO2, purification yield, batch success, turnaround and every check limit.
 
 Twin hooks
-  bio_titre_points(p)        upstream.molecule = "biology": N titre curve from Bio_sim
-  apply_seed_train_to_n1(p)  seedtrain.apply_to_n1 = True: the twin's N-1 runs as the batch N-1 stage
+  bio_titre_points(p)        upstream.molecule = "biology": N titre curve from the cell model
+  apply_seed_train_to_n1(p)  seedtrain.apply_to_n1 = True: the twin's N-1 runs as the N-1 stage
                              of a seed train sized for the twin N reactor (bioreactor.V_L)
   bio_design(p)              everything for the Outputs and Design tabs (result["bio"])
 
@@ -32,6 +43,15 @@ from dataclasses import asdict
 STAGES = (("n3", "N-3", "R-N3"), ("n2", "N-2", "R-N2"), ("n1", "N-1", "R-N1"))
 DEFAULT_SIZES = (2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 3000, 5000, 10000, 12000, 15000, 20000, 25000)
 SEED_KEYS = ("day", "Xv", "Xd", "viab", "glc", "gln", "lac", "amm", "osm", "mu", "kd", "net")
+MODES = ("batch", "fedbatch", "perfusion")
+MODE_LABELS = {"batch": "batch", "fedbatch": "fed-batch", "perfusion": "perfusion"}
+PRESETS = {
+    "workbook":     {"n3": "batch", "n2": "batch", "n1": "batch", "n": "fedbatch"},
+    "fb_all":       {"n3": "fedbatch", "n2": "fedbatch", "n1": "fedbatch", "n": "fedbatch"},
+    "fb_n1_perf_n": {"n3": "batch", "n2": "batch", "n1": "fedbatch", "n": "perfusion"},
+    "perf_all":     {"n3": "perfusion", "n2": "perfusion", "n1": "perfusion", "n": "perfusion"},
+}
+LN2 = math.log(2.0)
 _CACHE, _CACHE_MAX = {}, 64
 
 
@@ -131,7 +151,24 @@ def basis_label(st):
     return "Rules of thumb (fixed transfer densities and fixed μ)"
 
 
-# ── the cell model (Bio_sim and Seed_sim) ────────────────────────────
+def stage_modes(p):
+    """Culture mode of each stage {"n3", "n2", "n1", "n"}: "batch", "fedbatch" or "perfusion".
+    Without a culture block the workbook layout is used (batch seed stages, fed-batch N)."""
+    c = getattr(p, "culture", None)
+    base = PRESETS["workbook"]
+    if c is None:
+        return dict(base)
+    preset = str(c.preset).lower()
+    if preset in PRESETS:
+        return dict(PRESETS[preset])
+    out = {}
+    for k, default in base.items():                       # "custom" (or any other name)
+        m = str(getattr(c, "mode_" + k, default)).lower()
+        out[k] = m if m in MODES else default
+    return out
+
+
+# ── the cell model: batch and fed-batch (Bio_sim and Seed_sim) ───────
 def _simulate(b, X0, days, fed, shift):
     """Explicit Euler, exactly as the workbook: rates at step k from the state at step k."""
     dt = max(float(b.dt_d), 1e-4)
@@ -185,38 +222,172 @@ def _simulate(b, X0, days, fed, shift):
     return rows
 
 
-def _results(rows, b):
+# ── the cell model: perfusion ────────────────────────────────────────
+def _simulate_perfusion(b, c, X0, days, bleed, shift):
+    """Perfusion stage with the same cell biology as _simulate.
+
+    Volume is constant. Fresh medium (culture.perf_*) enters at D (1/day) from culture.perf_start_d;
+    live and dead cells are held back by the retention device; dissolved species leave with the
+    outflow; product leaves in the permeate at its passage (sieve) and fully in the bleed.
+    With bleed=True a cell bleed holds culture.perf_X_setpoint once the culture gets close to it.
+    Rows every bio.dt_d (integrated in culture.perf_substeps Euler steps) with the _simulate keys:
+    'titre' is the permeate titre and 'mass_g' the product harvested in the permeate so far.
+    """
+    dt_rec = max(float(b.dt_d), 1e-4)
+    m = max(1, int(c.perf_substeps))
+    dt = dt_rec / m
+    n = max(1, int(round(days / dt_rec)))
+    V = float(b.V0_L)
+    Xv, Xd = float(X0), 0.0
+    G, Q, L, A = float(b.glc0_gL), float(b.gln0_mM), float(b.lac0_gL), float(b.amm0_mM)
+    S, P, ivcd = float(b.S0_mOsm), 0.0, 0.0
+    mu_max = max(b.mu_max_d, 1e-12)
+    Xsp = float(c.perf_X_setpoint)
+    use_bleed = bool(bleed) and Xsp > 0
+    tau = max(float(c.perf_bleed_tau_d), 2.0 * dt)
+    keep_g = 1.0 - min(max(float(c.perf_qp_loss_per_gen), 0.0), 0.999)
+    keep_d = 1.0 - min(max(float(c.perf_qp_loss_per_day), 0.0), 0.999)
+    cspr = str(c.perf_rate_basis).lower() != "vvd"
+    can_swap = float(c.perf_sieve0) > float(c.perf_swap_below)
+    sieve, swaps, gens = float(c.perf_sieve0), 0, 0.0
+    harv = lost = media = 0.0                     # per litre of working volume
+    bleed_on = False
+    rows = []
+
+    def rates(t):
+        """Specific rates and flows from the current state (read from the enclosing function)."""
+        sh = shift and t >= b.shift_day - 1e-9
+        osm = S + 5.55 * G + 22.2 * L + Q + A
+        f_osm = b.K_osm / max(b.K_osm + max(0.0, osm - b.osm_crit), 1e-12)
+        f_lag = 1.0 - math.exp(-t / b.tau_lag_d) if b.tau_lag_d > 0 else 1.0
+        f_cap = max(0.0, 1.0 - Xv / c.perf_X_max) if c.perf_X_max > 0 else 1.0
+        mu = (b.mu_max_d * (b.f_mu_shift if sh else 1.0) * f_lag * f_cap
+              * _monod(G, b.K_glc_gL) * _monod(Q, b.K_gln_mM)
+              * _inhib(L, b.KI_lac_gL) * _inhib(A, b.KI_amm_mM) * f_osm)
+        kd = ((b.f_kd_shift if sh else 1.0) * (b.kd_min_d + b.kd_amm_max_d * _hill(A, b.Kd_amm_mM, b.n_amm))
+              + b.kd_osm_max_d * _hill(osm, b.Kd_osm, b.n_osm)
+              + b.kd_starve_max_d * _starve(G, b.K_starve_gL))
+        qP = (b.qP_pg_cell_d * (b.f_qp_shift if sh else 1.0)
+              * (1.0 + b.qp_osm_rise * max(0.0, osm - b.osm_crit) / 100.0)
+              * keep_g ** gens * keep_d ** t)                       # productivity ageing
+        fm = b.f_maint_shift if sh else 1.0
+        D = B = 0.0
+        if t >= c.perf_start_d - 1e-9:
+            D = (min(max(c.perf_cspr_pL_cell_d * 1e-3 * Xv, c.perf_vvd_min), c.perf_vvd_max)
+                 if cspr else max(float(c.perf_vvd), 0.0))
+            if bleed_on:
+                # replace what the cells grow, plus a pull back towards the setpoint
+                B = min(max(mu - kd + (Xv - Xsp) / (Xsp * tau), 0.0), max(float(c.perf_bleed_max_vvd), 0.0))
+                D = max(D, B)
+        return {"sh": sh, "osm": osm, "f_osm": f_osm, "mu": mu, "kd": kd, "qP": qP, "D": D, "B": B,
+                "q_glc": mu * b.glc_per_cell + b.m_glc * fm, "q_gln": mu * b.gln_per_cell + b.m_gln * fm}
+
+    for k in range(n + 1):
+        t = round(k * dt_rec, 9)
+        r = rates(t)
+        Xt = Xv + Xd
+        rows.append({"day": t, "T_C": b.T_after_C if r["sh"] else b.T_before_C, "V_L": V, "F_Ld": r["D"] * V,
+                     "Xv": Xv, "Xd": Xd, "Xt": Xt, "viab": 100.0 * Xv / Xt if Xt > 0 else 0.0,
+                     "glc": G, "gln": Q, "lac": L, "amm": A, "S": S, "osm": r["osm"], "f_osm": r["f_osm"],
+                     "mu": r["mu"], "kd": r["kd"], "net": r["mu"] - r["kd"], "qP": r["qP"], "ivcd": ivcd,
+                     "titre": sieve * P, "mass_g": harv * V,
+                     "titre_reactor": P, "D_vvd": r["D"], "bleed_vvd": r["B"], "sieve": sieve,
+                     "gens": gens, "tff_swaps": swaps, "media_L": media * V, "bleed_loss_g": lost * V})
+        if k == n:
+            break
+        for j in range(m):
+            ts = t + j * dt
+            if use_bleed and not bleed_on and Xv >= c.perf_bleed_enable_frac * Xsp:
+                bleed_on = True
+            r = rates(ts)
+            mu, kd, D, B = r["mu"], r["kd"], r["D"], r["B"]
+            Dp = D - B                                              # permeate share of the outflow
+            dXv = (mu - kd - B) * Xv
+            dXd = kd * Xv - (b.k_lysis_d + B) * Xd
+            dG = D * (c.perf_glc_gL - G) - r["q_glc"] * Xv
+            dQ = D * (c.perf_gln_mM - Q) - r["q_gln"] * Xv - b.k_deg_gln_d * Q
+            dL = (b.Y_lac_glc * mu * b.glc_per_cell * Xv
+                  - b.q_lac_max * Xv * _monod(L, b.K_lac_gL) * max(0.0, 1.0 - mu / mu_max) - D * L)
+            dA = b.Y_amm_gln * r["q_gln"] * Xv + b.k_deg_gln_d * Q - D * A
+            dS = D * (c.perf_S_mOsm - S)
+            dP = r["qP"] * Xv / 1000.0 - (Dp * sieve + B) * P
+            harv += Dp * sieve * P * dt
+            lost += B * P * dt
+            media += D * dt
+            gens += max(mu, 0.0) * dt / LN2
+            Xv_new = max(0.0, Xv + dXv * dt)
+            ivcd += (Xv + Xv_new) / 2.0 * dt
+            Xv, Xd = Xv_new, max(0.0, Xd + dXd * dt)
+            G, Q, L, A = (max(0.0, G + dG * dt), max(0.0, Q + dQ * dt),
+                          max(0.0, L + dL * dt), max(0.0, A + dA * dt))
+            S, P = max(0.0, S + dS * dt), max(0.0, P + dP * dt)
+            if ts >= c.perf_start_d - 1e-9:                         # retention device in use: it fouls
+                sieve = max(0.0, sieve - (c.perf_foul_base_d + c.perf_foul_per_dead_d * Xd) * dt)
+                if can_swap and sieve < c.perf_swap_below:
+                    sieve, swaps = float(c.perf_sieve0), swaps + 1
+    return rows
+
+
+def _results(rows, b, mode="fedbatch"):
     last = rows[-1]
     pk = max(rows, key=lambda r: r["Xv"])
     lp = max(rows, key=lambda r: r["lac"])
     hit = next((r["day"] for r in rows if r["titre"] >= b.target_titre_gL - 1e-12), None)
-    return {"final_titre_gL": last["titre"], "final_mass_kg": last["mass_g"] / 1000.0, "target_day": hit,
-            "peak_vcd": pk["Xv"], "peak_vcd_day": pk["day"], "final_viability_pct": last["viab"],
-            "min_glucose_gL": min(r["glc"] for r in rows), "peak_lactate_gL": lp["lac"],
-            "peak_lactate_day": lp["day"], "final_lactate_gL": last["lac"],
-            "peak_ammonia_mM": max(r["amm"] for r in rows), "peak_osm": max(r["osm"] for r in rows),
-            "final_volume_L": last["V_L"], "final_ivcd": last["ivcd"], "final_qP": last["qP"]}
+    out = {"mode": mode,
+           "final_titre_gL": last["titre"], "final_mass_kg": last["mass_g"] / 1000.0, "target_day": hit,
+           "peak_vcd": pk["Xv"], "peak_vcd_day": pk["day"], "final_viability_pct": last["viab"],
+           "min_glucose_gL": min(r["glc"] for r in rows), "peak_lactate_gL": lp["lac"],
+           "peak_lactate_day": lp["day"], "final_lactate_gL": last["lac"],
+           "peak_ammonia_mM": max(r["amm"] for r in rows), "peak_osm": max(r["osm"] for r in rows),
+           "final_volume_L": last["V_L"], "final_ivcd": last["ivcd"], "final_qP": last["qP"]}
+    if mode == "perfusion":
+        perf = [r for r in rows if r["D_vvd"] > 0]
+        out.update({"harvest_g_per_L": last["mass_g"] / max(last["V_L"], 1e-9),
+                    "bleed_loss_g": last["bleed_loss_g"], "media_L": last["media_L"],
+                    "mean_vvd": sum(r["D_vvd"] for r in perf) / len(perf) if perf else 0.0,
+                    "generations": last["gens"], "final_sieve": last["sieve"], "tff_swaps": last["tff_swaps"]})
+    return out
 
 
 def bio_run(p):
-    """Bio_sim: fed-batch run of the biologically grounded model (cached on the bio parameters)."""
+    """Bio_sim for N in its culture mode (cached on the parameters that matter)."""
     b = p.bio
+    mode = stage_modes(p)["n"]
+    c = getattr(p, "culture", None)
+    if mode == "perfusion" and c is not None:
+        def go_perf():
+            rows = _simulate_perfusion(b, c, b.X0, b.run_days, bleed=True, shift=bool(c.perf_temp_shift))
+            return {"rows": rows, "results": _results(rows, b, "perfusion")}
+        return _cached(("bio", "perfusion") + _key(b) + _key(c), go_perf)
+    fed = mode != "batch"
 
     def go():
-        rows = _simulate(b, b.X0, b.run_days, fed=True, shift=True)
-        return {"rows": rows, "results": _results(rows, b)}
-    return _cached(("bio",) + _key(b), go)
+        rows = _simulate(b, b.X0, b.run_days, fed=fed, shift=True)
+        return {"rows": rows, "results": _results(rows, b, "fedbatch" if fed else "batch")}
+    return _cached(("bio", mode) + _key(b), go)
 
 
-def seed_sim(b, X0, days):
-    """Seed_sim: one seed stage, batch at 37 °C in fresh medium, same biology."""
-    return _cached(("seed", float(X0), float(days)) + _key(b),
-                   lambda: _simulate(b, X0, days, fed=False, shift=False))
+def seed_sim(b, X0, days, mode="batch", c=None):
+    """Seed_sim: one seed stage at 37 °C, same biology. mode "batch" is the workbook's stage."""
+    if mode == "perfusion" and c is not None:
+        return _cached(("seed", "perfusion", float(X0), float(days)) + _key(b) + _key(c),
+                       lambda: _simulate_perfusion(b, c, X0, days, bleed=False, shift=False))
+    fed = mode == "fedbatch"
+    return _cached(("seed", "fedbatch" if fed else "batch", float(X0), float(days)) + _key(b),
+                   lambda: _simulate(b, X0, days, fed=fed, shift=False))
 
 
 def bio_titre_points(p):
     """Titre curve for upstream.molecule = "biology" ([N day, g/L]); titre_scale is applied by titre_at."""
-    rows = bio_run(p)["rows"]
+    run = bio_run(p)
+    rows = run["rows"]
+    if run["results"].get("mode") == "perfusion":
+        # The twin multiplies this curve by its own permeate flow. Rescale the permeate titre so the
+        # grams per day match the cell model even when the two perfusion rates differ.
+        up = p.upstream
+        out_frac = up.bleed_frac if up.cell_retention else up.tff_retentate_frac
+        twin_perm = max(float(up.VVD) * (1.0 - out_frac), 1e-9)
+        return [[r["day"], r["titre"] * (r["D_vvd"] - r["bleed_vvd"]) / twin_perm] for r in rows]
     if getattr(p.bio, "titre_link", "fedbatch") == "perfusion":
         VVD = max(float(p.upstream.VVD), 1e-9)
         return [[r["day"], r["qP"] * r["Xv"] / (1000.0 * VVD)] for r in rows]   # Inputs sheet: P = qP·Xv/D
@@ -254,14 +425,24 @@ def time_to_reach(rows, X):
 def demand(p, run=None):
     d, b, st = p.demand, p.bio, p.seedtrain
     R = (run or bio_run(p))["results"]
+    perf = R.get("mode") == "perfusion"
     titre = R["final_titre_gL"]
-    ratio = R["final_volume_L"] / max(b.V0_L, 1e-9)
-    kg_m3 = titre * d.dsp_yield
+    if perf:
+        g_per_L = R["harvest_g_per_L"]          # grams harvested per litre of reactor over the run
+        ratio = 1.0                             # constant volume
+    else:
+        g_per_L = titre
+        ratio = R["final_volume_L"] / max(b.V0_L, 1e-9)
+    kg_m3 = g_per_L * d.dsp_yield
     cycle = b.run_days + d.turnaround_d
     bpr = int(math.floor(d.operating_days / cycle + 1e-9)) if cycle > 0 else 0
     sizes, fmax = _sizes(st), max(st.max_fill_n, 1e-9)
-    notes = ["Fed-batch basis: harvest titre and volume growth from Bio_sim; purification yield, batch success "
-             "and turnaround are rules of thumb. The IDB twin's own per-year totals are on the Outputs tab."]
+    if perf:
+        notes = [f"Perfusion basis: grams harvested in the permeate per litre of reactor over {b.run_days:g} days, "
+                 "from the perfusion cell model; purification yield, batch success and turnaround are rules of thumb."]
+    else:
+        notes = ["Fed-batch basis: harvest titre and volume growth from Bio_sim; purification yield, batch success "
+                 "and turnaround are rules of thumb. The IDB twin's own per-year totals are on the Outputs tab."]
     if bpr <= 0:
         notes.append("No whole batch fits the operating year with this run length and turnaround.")
     if kg_m3 <= 0:
@@ -278,7 +459,8 @@ def demand(p, run=None):
                 "start_L": full / ratio if ratio > 0 else None, "vessel_L": ves, "fill_pct": 100.0 * full / ves,
                 "capacity_kg_yr": bpy * d.batch_success * ves * fmax / 1000.0 * kg_m3}
 
-    return {"annual_kg": d.annual_kg, "titre_gL": titre, "volume_ratio": ratio, "kg_per_m3": kg_m3,
+    return {"basis": "perfusion" if perf else "fedbatch", "annual_kg": d.annual_kg, "titre_gL": titre,
+            "g_per_L_run": g_per_L, "volume_ratio": ratio, "kg_per_m3": kg_m3,
             "cycle_d": cycle, "batches_per_reactor": bpr, "selected": option(max(1, int(d.n_reactors))),
             "options": [option(n) for n in range(1, 5)], "notes": notes}
 
@@ -290,6 +472,8 @@ def _chk(ok, text):
 
 def seed_train(p, n_basis=None, run=None):
     b, st, br = p.bio, p.seedtrain, p.bioreactor
+    c = getattr(p, "culture", None)
+    modes = stage_modes(p)
     run = run or bio_run(p)
     basis = n_basis or st.n_basis
     dem = demand(p, run)
@@ -312,11 +496,12 @@ def seed_train(p, n_basis=None, run=None):
         src, run_N, basis = "Twin N reactor (bioreactor.V_L)", p.run_days, "twin"
     X0_N = b.X0
 
-    # each seed stage from its own batch simulation
+    # each seed stage from its own simulation in its culture mode
     stages = []
     for key, name, tag in STAGES:
+        mode = modes[key]
         x0 = float(getattr(st, "seed_" + key))
-        sim = seed_sim(b, x0, st.sim_days)
+        sim = seed_sim(b, x0, st.sim_days, mode, c)
         tp = transfer_point(sim, thr)
         xt_rule = float(getattr(st, "xt_rule_" + key))
         xt = tp["Xv"] if den_bio else xt_rule
@@ -332,8 +517,10 @@ def seed_train(p, n_basis=None, run=None):
                          f"{st.sim_days:g} d; the biology transfer density is the end of the simulation.")
         dur = t_bio if (dur_bio and t_bio is not None) else t_rule
         at = _at(sim, t_bio if t_bio is not None else sim[-1]["day"])
+        end = _at(sim, dur)
+        perf_per_L = end.get("media_L", 0.0) / max(b.V0_L, 1e-9) if mode == "perfusion" else 0.0
         pk = tp["peak_net"]
-        stages.append({"key": key, "name": name, "tag": tag, "type": getattr(st, "type_" + key),
+        stages.append({"key": key, "name": name, "tag": tag, "type": getattr(st, "type_" + key), "mode": mode,
                        "max_fill": float(getattr(st, "max_fill_" + key)),
                        "min_fill": float(getattr(st, "min_fill_" + key)),
                        "x0": x0, "xt_bio": tp["Xv"], "xt_rule": xt_rule, "xt": xt,
@@ -341,17 +528,22 @@ def seed_train(p, n_basis=None, run=None):
                        "net_pct": 100.0 * at["net"] / pk if pk > 0 else None,
                        "viab_pct": at["viab"], "gln_mM": at["gln"], "glc_gL": at["glc"],
                        "peak_net": pk, "threshold_net": thr * pk,
-                       "expansion": xt / x0 if x0 > 0 else None, "flag": flag})
+                       "expansion": xt / x0 if x0 > 0 else None, "flag": flag,
+                       "vol_growth": end["V_L"] / max(b.V0_L, 1e-9),      # fed-batch feed (1 otherwise)
+                       "perf_L_per_L": perf_per_L,                       # perfused medium per L of stage
+                       "perf_vvd_avg": perf_per_L / dur if dur > 0 else 0.0})
 
-    # volumes back-calculated from N: cells needed downstream ÷ transfer density
+    # volumes back-calculated from N: cells needed downstream ÷ transfer density (volume at transfer)
     V_next, X0_next = V_N, X0_N
     for s in reversed(stages):
         s["V_L"] = X0_next * V_next / max(s["xt"], 1e-12)
+        s["start_L"] = s["V_L"] / max(s["vol_growth"], 1e-9)            # fed-batch starts smaller
+        s["media_L"] = s["V_L"] * (1.0 + s["perf_L_per_L"])              # fill + feed or + perfusion
         s["cells_1e9"] = s["xt"] * s["V_L"]              # 1e6 cells/mL × L = 1e9 cells
         s["split"] = V_next / s["V_L"] if s["V_L"] > 0 else None
         s["vessel_L"] = _std(s["V_L"] / max(s["max_fill"], 1e-9), sizes)
         s["fill_pct"] = 100.0 * s["V_L"] / s["vessel_L"]
-        V_next, X0_next = s["V_L"], s["x0"]
+        V_next, X0_next = s["start_L"], s["x0"]
 
     # oxygen: OUR at transfer density (seed) or peak VCD of the cell model (N)
     dC = st.O2_sat_air_mM * (1.0 - st.DO_pct / 100.0)
@@ -360,14 +552,14 @@ def seed_train(p, n_basis=None, run=None):
         s["kLa_air"] = s["OUR"] / dC if dC > 0 else None
     peak_N = run["results"]["peak_vcd"]
     N = {"key": "n", "name": "N (production)", "tag": "R-N", "type": "Stirred tank", "source": src,
-         "max_fill": st.max_fill_n, "min_fill": st.min_fill_n, "x0": X0_N, "V_L": V_N, "vessel_L": ves_N,
-         "fill_pct": 100.0 * V_N / ves_N if ves_N else None, "duration_d": run_N, "peak_vcd": peak_N,
-         "OUR": peak_N * st.qO2_pmol_cell_h,
+         "mode": modes["n"], "max_fill": st.max_fill_n, "min_fill": st.min_fill_n, "x0": X0_N, "V_L": V_N,
+         "vessel_L": ves_N, "fill_pct": 100.0 * V_N / ves_N if ves_N else None, "duration_d": run_N,
+         "peak_vcd": peak_N, "OUR": peak_N * st.qO2_pmol_cell_h,
          "kLa_air": peak_N * st.qO2_pmol_cell_h / dC if dC > 0 else None}
 
     # timeline from vial thaw
     s3 = stages[0]
-    cells = s3["x0"] * s3["V_L"]
+    cells = s3["x0"] * s3["start_L"]
     doublings = max(0.0, math.log2(cells * 1e3 / max(st.vial_cells_1e6, 1e-9))) if cells > 0 else 0.0
     if dur_bio and s3["dur_bio"] and s3["dur_bio"] > 0 and s3["xt"] > s3["x0"]:
         mu_f = math.log(s3["xt"] / s3["x0"]) / s3["dur_bio"]
@@ -388,8 +580,11 @@ def seed_train(p, n_basis=None, run=None):
 
     def c_fill(s):
         f = s.get("fill_pct")
-        return None if f is None else _chk(s["min_fill"] * 100 - 1e-6 <= f <= s["max_fill"] * 100 + 1e-6,
-                                           f"{f:.0f} %")
+        if f is None:
+            return None
+        f0 = 100.0 * s.get("start_L", s["V_L"]) / s["vessel_L"] if s.get("vessel_L") else f
+        text = f"{f0:.0f}–{f:.0f} %" if abs(f - f0) > 0.5 else f"{f:.0f} %"
+        return _chk(s["min_fill"] * 100 - 1e-6 <= f0 and f <= s["max_fill"] * 100 + 1e-6, text)
 
     def c_split(s):
         x = s.get("split")
@@ -423,14 +618,15 @@ def seed_train(p, n_basis=None, run=None):
                f"Seed train needs attention ({len(fails)} check{'s' if len(fails) > 1 else ''}): "
                + "; ".join(fails[:4]))
     return {"basis": {"n": basis, "duration": st.duration_basis, "density": st.density_basis},
-            "basis_label": basis_label(st), "threshold_pct": st.growth_threshold_pct,
+            "basis_label": basis_label(st), "threshold_pct": st.growth_threshold_pct, "modes": modes,
             "stages": stages, "n": N, "timeline": tl, "checks": checks, "ok": not fails,
             "overall": overall, "notes": notes, "demand": dem}
 
 
 def apply_seed_train_to_n1(p):
-    """seedtrain.apply_to_n1: run the twin's N-1 as the batch N-1 stage of a seed train sized for the
-    twin N reactor. Idempotent (the train does not depend on the n1 parameters). Returns the train or None."""
+    """seedtrain.apply_to_n1: run the twin's N-1 as the N-1 stage of a seed train sized for the
+    twin N reactor. Idempotent (the train does not depend on the n1 parameters). Returns the train or None.
+    A perfusion N-1 keeps its average perfusion rate (permeate to waste); batch and fed-batch run at VVD 0."""
     st = getattr(p, "seedtrain", None)
     if st is None or not st.apply_to_n1:
         return None
@@ -439,7 +635,7 @@ def apply_seed_train_to_n1(p):
     n1 = p.n1
     n1.enabled = True
     n1.V_L = n1.transfer_L = float(s["V_L"])
-    n1.VVD = 0.0                                           # batch stage: no permeate to waste
+    n1.VVD = float(s["perf_vvd_avg"]) if s["mode"] == "perfusion" else 0.0
     n1.X0 = float(s["x0"])
     n1.X_max = max(float(s["xt"]), n1.X0)
     days = max(float(s["duration_d"]), 1.0 / 24.0)
@@ -450,8 +646,10 @@ def apply_seed_train_to_n1(p):
 
 
 def bio_design(p):
-    """Everything the page shows: Bio_sim curves and results, Seed_sim curves, seed train and demand."""
+    """Everything the page shows: N curves and results, seed-stage curves, seed train and demand."""
     b, st = p.bio, p.seedtrain
+    c = getattr(p, "culture", None)
+    modes = stage_modes(p)
     run = bio_run(p)
     rows, R = run["rows"], run["results"]
     step = max(1, int(round(b.report_days / max(b.dt_d, 1e-9))))
@@ -459,32 +657,55 @@ def bio_design(p):
     dem = tr.pop("demand")
     seeds = {}
     for s in tr["stages"]:
-        sim = seed_sim(b, s["x0"], st.sim_days)
-        seeds[s["key"]] = {"name": s["name"], "x0": s["x0"], "xt": s["xt"], "transfer_day": s["dur_bio"],
-                           "peak_net": s["peak_net"], "threshold_net": s["threshold_net"],
-                           "rows": [{k: r[k] for k in SEED_KEYS} for r in sim]}
+        sim = seed_sim(b, s["x0"], st.sim_days, s["mode"], c)
+        keys = SEED_KEYS + (("D_vvd",) if s["mode"] == "perfusion" else ())
+        seeds[s["key"]] = {"name": s["name"], "mode": s["mode"], "x0": s["x0"], "xt": s["xt"],
+                           "transfer_day": s["dur_bio"], "peak_net": s["peak_net"],
+                           "threshold_net": s["threshold_net"],
+                           "rows": [{k: r[k] for k in keys} for r in sim]}
+    preset = str(getattr(c, "preset", "workbook")) if c is not None else "workbook"
+    mode_txt = ", ".join(f"{name} {MODE_LABELS[modes[key]]}" for key, name, _ in STAGES)
     notes = [f"Seed train basis: {tr['basis_label']}. N from: {tr['n']['source']}.",
-             f"Bio_sim is a fed-batch model (CSFR feeding, temperature shift on day {b.shift_day:g}); it sizes N on "
-             "the Demand basis. The twin's IDB N reactor is a perfusion reactor: choose 'Biology model' as the "
-             "titre curve to use its shape (scaled by the case or titre_scale).",
-             "Rules of thumb used whatever the basis: seed densities, the growth threshold, qO2, purification "
-             "yield, batch success, turnaround and the check limits.",
-             "Transfer-point values are interpolated at the transfer time (the workbook shows the next 0.1-day row)."]
+             f"Culture modes: {mode_txt}, N {MODE_LABELS[modes['n']]} (culture.preset = {preset})."]
+    if modes["n"] == "perfusion":
+        notes.append(f"N is a perfusion reactor: constant volume, cells held back by the retention device, a bleed "
+                     f"holds {c.perf_X_setpoint:g} ×10⁶ cells/mL. Titre is the permeate titre; Demand sizes N from "
+                     f"the grams harvested per litre of reactor over {b.run_days:g} days.")
+        if c.perf_qp_loss_per_gen <= 0 and c.perf_qp_loss_per_day <= 0:
+            notes.append("No productivity ageing is set (culture.perf_qp_loss_per_gen and perf_qp_loss_per_day "
+                         "are 0): cells keep their productivity for the whole run. Set the loss from the cell "
+                         "line stability study.")
+        if c.perf_foul_per_dead_d <= 0:
+            notes.append("Retention-device fouling runs at a fixed rate (culture.perf_foul_per_dead_d = 0); it "
+                         "does not yet speed up when viability falls.")
+    else:
+        notes.append(f"N runs as {MODE_LABELS[modes['n']]} (CSFR feeding, temperature shift on day "
+                     f"{b.shift_day:g}); Demand sizes N on that basis. The twin's IDB N reactor is a perfusion "
+                     "reactor: set culture.preset to fb_n1_perf_n or perf_all to model N as perfusion.")
+    if modes["n1"] == "perfusion":
+        notes.append("A perfusion N-1 transfers at high density: raise bio.X0 (the N seed density) to suit, "
+                     "or the split-ratio check will fail.")
+    notes += ["Rules of thumb used whatever the basis: seed densities, the growth threshold, qO2, purification "
+              "yield, batch success, turnaround and the check limits.",
+              "Transfer-point values are interpolated at the transfer time (the workbook shows the next 0.1-day row)."]
     if p.upstream.molecule == "biology":
-        link = "perfusion qP·Xv/VVD" if b.titre_link == "perfusion" else "fed-batch titre"
+        if modes["n"] == "perfusion":
+            link = "perfusion cell model, permeate titre rescaled to the twin's permeate flow (grams per day kept)"
+        else:
+            link = "perfusion qP·Xv/VVD" if b.titre_link == "perfusion" else "fed-batch titre"
         notes.append(f"N titre curve in this run: biology model, {link}, × titre_scale {p.upstream.titre_scale:.3g}.")
     if st.apply_to_n1:
-        notes.append("The twin's N-1 runs as the batch N-1 stage of this train (VVD 0; volume, duration and seed "
-                     "density from the train); the train is sized for the twin N reactor.")
+        notes.append(f"The twin's N-1 runs as the {MODE_LABELS[modes['n1']]} N-1 stage of this train (volume, "
+                     "duration and seed density from the train); the train is sized for the twin N reactor.")
     notes += tr["notes"]
-    return _rnd({"bio": {"results": R, "series": rows, "curve": rows[::step], "target_gL": b.target_titre_gL,
-                         "run_days": b.run_days, "dt_d": b.dt_d},
+    return _rnd({"bio": {"mode": modes["n"], "results": R, "series": rows, "curve": rows[::step],
+                         "target_gL": b.target_titre_gL, "run_days": b.run_days, "dt_d": b.dt_d},
                  "seed_sim": seeds, "seed_train": tr, "demand": dem, "notes": notes})
 
 
 if __name__ == "__main__":
     from icb_process import ICBParams
-    d = bio_design(ICBParams())
+    d = bio_design(ICBParams())                       # default preset "workbook": must match the workbook
     R, T, D = d["bio"]["results"], d["seed_train"], d["demand"]
     for name, got, want in (("Final titre g/L", R["final_titre_gL"], 3.69008),
                             ("Peak VCD 1e6/mL", R["peak_vcd"], 13.02022),
@@ -500,3 +721,23 @@ if __name__ == "__main__":
         ok = got is not None and abs(got - want) <= 1e-3 * max(abs(want), 1.0)
         print(f"{'OK  ' if ok else 'DIFF'} {name:<22}{got!s:>14}   workbook {want}")
     print(T["overall"])
+
+    print("\nCulture presets (typical perfusion defaults, not site data):")
+    for label, preset, days, loss in (("fb_all", "fb_all", None, 0.0),
+                                      ("fb_n1_perf_n", "fb_n1_perf_n", None, 0.0),
+                                      ("perf_all", "perf_all", None, 0.0),
+                                      ("perf_all 60 d, 0.5 %/gen", "perf_all", 60.0, 0.005)):
+        q = ICBParams()
+        q.culture.preset = preset
+        q.culture.perf_qp_loss_per_gen = loss
+        if days:
+            q.bio.run_days = days
+        dq = bio_design(q)
+        r = dq["bio"]["results"]
+        extra = ""
+        if r["mode"] == "perfusion":
+            extra = (f", {r['harvest_g_per_L']:.1f} g harvested per L reactor, mean {r['mean_vvd']:.2f} VVD, "
+                     f"{r['generations']:.0f} generations, {r['tff_swaps']} device swap(s)")
+        print(f"  {label:<26} N {r['mode']:<9} titre {r['final_titre_gL']:.2f} g/L, "
+              f"viability {r['final_viability_pct']:.0f} %{extra}")
+        print(f"  {'':<26} {dq['seed_train']['overall']}")

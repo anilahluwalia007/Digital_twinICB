@@ -27,7 +27,8 @@ times are typical placeholders, not site data. The flowsheet names the depth
 filtration solutions but not their order; the order used here is assumed.
 
 Biology, seed train N-3 -> N and production-reactor sizing from demand live in icb_bio.py
-(parameters bio, seedtrain, demand below; titre curve "biology"; seedtrain.apply_to_n1).
+(parameters bio, seedtrain, demand, culture below; titre curve "biology"; seedtrain.apply_to_n1).
+culture.preset picks batch, fed-batch or perfusion for each stage N-3 .. N.
 
 Units: time h, volume L, mass g, cell density 1e6 cells/mL, rates pg/cell/h.
 """
@@ -627,7 +628,7 @@ class SeedTrainParams:               # Seed_train: N-3, N-2, N-1 and N back to t
     stage_min_d: float = 2.0
     stage_max_d: float = 5.0
     viability_min_pct: float = 95.0
-    apply_to_n1: bool = False        # run the twin's N-1 as this batch N-1 stage (train sized for the twin N)
+    apply_to_n1: bool = False        # run the twin's N-1 as this train's N-1 stage (mode from culture.preset)
     vessel_sizes_L: list = field(default_factory=lambda: [2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 3000,
                                                           5000, 10000, 12000, 15000, 20000, 25000])
 
@@ -657,6 +658,41 @@ def _cast(old, new):
 
 
 @dataclass
+class CultureParams:                 # culture mode per stage and the perfusion cell model (icb_bio.py)
+    preset: str = "workbook"         # workbook | fb_all | fb_n1_perf_n | perf_all | custom
+    mode_n3: str = "batch"           # used only with preset "custom": batch | fedbatch | perfusion
+    mode_n2: str = "batch"
+    mode_n1: str = "batch"
+    mode_n: str = "fedbatch"
+    # --- perfusion medium and rate ---
+    perf_start_d: float = 1.0        # batch until this day, then perfusion
+    perf_rate_basis: str = "cspr"    # "cspr": rate follows the cells; "vvd": fixed rate
+    perf_cspr_pL_cell_d: float = 30.0
+    perf_vvd: float = 1.2            # fixed rate when perf_rate_basis = "vvd"
+    perf_vvd_min: float = 0.3
+    perf_vvd_max: float = 2.5
+    perf_glc_gL: float = 8.0         # perfusion medium
+    perf_gln_mM: float = 6.0
+    perf_S_mOsm: float = 262.0       # medium osmolality without glucose, glutamine, lactate, ammonia
+    perf_X_max: float = 100.0        # practical density ceiling (oxygen transfer, viscosity); 0 = none
+    perf_temp_shift: bool = False    # N only: apply the bio.shift_day temperature shift
+    # --- cell bleed (N only) ---
+    perf_X_setpoint: float = 50.0    # 1e6 cells/mL; 0 = no bleed
+    perf_bleed_enable_frac: float = 0.95
+    perf_bleed_tau_d: float = 0.5    # how quickly the bleed pulls density back to the setpoint
+    perf_bleed_max_vvd: float = 0.5
+    # --- cell retention device ---
+    perf_sieve0: float = 0.98        # product passage of a fresh device
+    perf_foul_base_d: float = 0.006  # passage lost per day
+    perf_foul_per_dead_d: float = 0.0  # extra loss per day per 1e6 dead cells/mL (from filter studies)
+    perf_swap_below: float = 0.85    # swap the device when passage falls below this
+    # --- long-run productivity (set from the cell line stability study) ---
+    perf_qp_loss_per_gen: float = 0.0  # share of qP lost per cell generation
+    perf_qp_loss_per_day: float = 0.0  # share of qP lost per day of culture
+    perf_substeps: int = 4           # Euler steps per bio.dt_d
+
+
+@dataclass
 class ICBParams:
     n1: N1Params = field(default_factory=N1Params)
     upstream: UpstreamParams = field(default_factory=UpstreamParams)
@@ -679,6 +715,7 @@ class ICBParams:
     bio: BioParams = field(default_factory=BioParams)
     seedtrain: SeedTrainParams = field(default_factory=SeedTrainParams)
     demand: DemandParams = field(default_factory=DemandParams)
+    culture: CultureParams = field(default_factory=CultureParams)
     run_days: float = 14.0
     lot_window_h: float = 24.0       # UF/DF collects this long per lot
     disturbances: list = field(default_factory=list)
@@ -1145,7 +1182,8 @@ def process_design(p):
     d["n1"] = n1 = n1_summary(p)
     if tr is not None:
         s = tr["stages"][-1]
-        d["notes"].append(f"N-1 is the batch N-1 stage of the seed train ({tr['basis_label']}): {s['V_L']:.1f} L, "
+        kind = {"batch": "batch", "fedbatch": "fed-batch", "perfusion": "perfusion"}.get(s.get("mode"), "batch")
+        d["notes"].append(f"N-1 is the {kind} N-1 stage of the seed train ({tr['basis_label']}): {s['V_L']:.1f} L, "
                           f"{s['duration_d']:.2f} d, {s['x0']:g} → {s['xt']:.2f} ×10⁶/mL; seeds N at "
                           f"{n1['n_seed_vcd']} ×10⁶/mL.")
     if n1.get("enabled") and n1["reason"] not in ("target reached", "fixed N-1 duration"):

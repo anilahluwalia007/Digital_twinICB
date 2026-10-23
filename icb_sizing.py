@@ -6,7 +6,8 @@ size_equipment(p, res, history, sol_day)  sizes every unit from one hourly run (
 size_portfolio(p, seed)                   worst case across all titre curves incl. the biology model (/api/icb/sizing)
 
   Bioreactors   working volume is an input (sets the permeate flow): nominal size, media bags, pumps
-  Seed train    N-3, N-2, N-1 and N vessels from icb_bio.seed_train (biology and/or rules of thumb)
+  Seed train    N-3, N-2, N-1 and N vessels from icb_bio.seed_train (biology and/or rules of thumb),
+                each in its culture mode (batch, fed-batch or perfusion: culture.preset)
   TFF F-101     membrane area from the peak permeate flow at a design flux
   Protein A     resin per train from the peak g/day and the cycle limit (load + recovery time)
   Vessels       peak working volume × margin / fill, next standard size
@@ -26,6 +27,7 @@ import copy
 import math
 from icb_process import (WASTE_STREAMS, BUFFER_OPS, SOLUTIONS, TITRE_PROFILES, capture_cycle, det_frac,
                          profile_names)
+from icb_bio import stage_modes
 
 VESSEL_SIZES = (1, 2, 5, 10, 20, 50, 100, 200, 300, 500, 1000, 1500, 2000, 3000, 5000, 10000, 20000, 50000)
 TOTE_SIZES = (10, 20, 50, 100, 200, 500, 1000)
@@ -179,15 +181,18 @@ def size_equipment(p, res, history, sol_day=None):
     n1, br = p.n1, p.bioreactor
     n1s = (res.get("design") or {}).get("n1") or {}
     if n1.enabled:
-        batch_n1 = n1.VVD <= 0                                  # batch N-1 from the seed train
-        rows.append(_row("R-101", ("N-1 batch seed (seed-train stage)" if batch_n1 else "N-1 perfusion seed")
+        batch_n1 = n1.VVD <= 0                                  # batch or fed-batch N-1 from the seed train
+        kind = ("fed-batch" if batch_n1 and p.seedtrain.apply_to_n1 and stage_modes(p)["n1"] == "fedbatch"
+                else "batch")
+        rows.append(_row("R-101", (f"N-1 {kind} seed (seed-train stage)" if batch_n1 else "N-1 perfusion seed")
                          + ", working volume", n1.V_L, "L", _std(n1.V_L / sz.vessel_fill),
                          n1.V_L, f"nominal = working / {sz.vessel_fill:g} fill; seeds N at {n1s.get('n_seed_vcd')} "
                          f"×10⁶/mL after {n1s.get('days')} d ({n1s.get('reason')})"))
-        m1 = n1.VVD * n1.V_L if n1.VVD > 0 else n1.V_L          # batch N-1: one fill per day of supply
+        m1 = n1.VVD * n1.V_L if n1.VVD > 0 else n1.V_L          # batch / fed-batch N-1: one fill per day of supply
         rows.append(_row("BAG-101", "N-1 media hold", m1 * sz.media_days, "L",
                          _std(m1 * sz.media_days * sz.vessel_margin), None,
-                         (f"batch: one fill of {n1.V_L:.1f} L" if batch_n1 else f"{n1.VVD:g} VVD × {n1.V_L:g} L")
+                         (f"{kind}: {'fill plus feed' if kind == 'fed-batch' else 'one fill'} of {n1.V_L:.1f} L"
+                          if batch_n1 else f"{n1.VVD:g} VVD × {n1.V_L:g} L")
                          + f" × {sz.media_days:g} d × {sz.vessel_margin:g}"))
         _pump(rows, sz, "P-100", "N-1 media fill pump" if batch_n1 else "N-1 media / permeate pump", m1 / 24.0,
               f"one fill of {n1.V_L:.1f} L in 24 h" if batch_n1 else f"{n1.VVD:g} VVD × {n1.V_L:g} L / 24 h")
@@ -214,9 +219,11 @@ def size_equipment(p, res, history, sol_day=None):
                 if cell and not cell["ok"]:
                     bad[i].append(f"{c['label']}: {cell['text']}")
         for i, s in enumerate(cols):
-            basis = (f"{tr['basis_label']}; seed {s['x0']:g} → transfer {s['xt']:.2f} ×10⁶/mL in "
-                     f"{s['duration_d']:.2f} d; max fill {s['max_fill']:g}" if s["key"] != "n"
-                     else f"N from {s.get('source', '')}; seeded at {s['x0']:g} ×10⁶/mL")
+            mode = {"batch": "batch", "fedbatch": "fed-batch", "perfusion": "perfusion"}.get(s.get("mode"), "")
+            basis = (f"{mode} stage; {tr['basis_label']}; seed {s['x0']:g} → transfer {s['xt']:.2f} ×10⁶/mL in "
+                     f"{s['duration_d']:.2f} d; max fill {s['max_fill']:g}; medium {_n(s.get('media_L')):.1f} L"
+                     if s["key"] != "n"
+                     else f"{mode} N from {s.get('source', '')}; seeded at {s['x0']:g} ×10⁶/mL")
             rows.append(_row(s["tag"], f"{s['name']} {str(s.get('type', '')).lower()}, working volume",
                              s["V_L"], "L", s["vessel_L"], None, basis, "; ".join(bad[i])))
 
