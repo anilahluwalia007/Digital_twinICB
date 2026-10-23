@@ -6,6 +6,7 @@
    streams animate; vessel levels, column states and values follow the run hour
    by hour. Quiet stretches where no new unit joins (e.g. the N-1 seed phase) are
    fast-forwarded to at most MAX_GAP_S seconds of film.
+   When the NevAI watch flags titre drifting from the forecast, the top pill says so during playback.
    Recording uses MediaRecorder: MP4 (H.264) where the browser supports
    it (Safari, recent Chrome/Edge), otherwise WebM. Recording runs in real time.
    Page ids: vidStart vidHour vidLen vidRate vidTour vidRes vidPreview vidRecord vidStop vidInfo vidCanvas vidOut
@@ -493,7 +494,8 @@
     y += 20;
     const r = st.r, rows = [
       ['Permeate titre', st.r0.titre_harvest === null || st.r0.titre_harvest === undefined ? '—' : fmt(r.titre_harvest) + ' g/L'],
-      ['NevAI +24 h', st.fc === null || st.fc === undefined ? (P.fcUsed ? '—' : 'off') : fmt(st.fc) + ' g/L'],
+      ['NevAI +24 h', (st.fc === null || st.fc === undefined ? (P.fcUsed ? '—' : 'off') : fmt(st.fc) + ' g/L') +
+                      (st.watch ? '  ⚠' : '')],
       ['Surge tank', `${fmt(r.sump_L)} L · ${fmt(r.sump_g)} g`],
       ['Protein A cycles', String(Math.round(r.cycles))],
       ['Buffer use', fmt(r.buffer_L_h) + ' L/h'],
@@ -659,6 +661,10 @@
     }
     if (s.type === 'play' && s.ff)
       isl = {text: `Fast-forward · next unit joins at hour ${s.c1}`, a: 1, w: easeOutBack(clamp(lt / 0.5))};
+    const wThr = num(J.params.control && J.params.control.nevai_watch_threshold) || 0.12;
+    if (s.type === 'play' && !s.ff && st.r0.nevai_watch !== null && st.r0.nevai_watch !== undefined &&
+        st.r0.nevai_watch > wThr)
+      isl = {text: 'NevAI watch · permeate titre off forecast', a: 1, w: 1};
     c.setTransform(SC, 0, 0, SC, 0, 0);
     const bg = c.createLinearGradient(0, 0, 0, VH);
     bg.addColorStop(0, '#eef1f6'); bg.addColorStop(1, '#dde3ec');

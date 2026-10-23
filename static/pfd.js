@@ -9,7 +9,7 @@
    For the video exporter (static/pfdvideo.js):
         PFD.svg({video: true})  clean diagram (no live text) as an SVG string
         PFD.geo()               pipe, vessel, column, value-label and tag coordinates
-        PFD.state(i)            stream values, equipment state and readout at series row i
+        PFD.state(i)            stream values, equipment state, readout and NevAI watch flag at series row i
         PFD.series()  PFD.params()  PFD.length()
 */
 (function () {
@@ -594,12 +594,18 @@
     return null;
   }
 
+  // NevAI watch: measured titre has drifted from the forecast trend this hour
+  function watchOn(r0) {
+    const thr = num(P && P.control && P.control.nevai_watch_threshold) || 0.12;
+    return r0.nevai_watch !== null && r0.nevai_watch !== undefined && r0.nevai_watch > thr;
+  }
+
   function readout(i, r0, r) {
     const fc = lastFc(i);
     const lines = [
       `Campaign day ${fmt(r.day)} · ` + (r0.phase ? `N day ${fmt(r.n_day)}` : 'N-1 seed phase'),
       `Permeate titre ${r0.titre_harvest != null ? fmt(r.titre_harvest) + ' g/L' : '—'} · NevAI +24 h ` +
-        (fc != null ? fmt(fc) + ' g/L' : '—'),
+        (fc != null ? fmt(fc) + ' g/L' : '—') + (watchOn(r0) ? ' · ⚠ titre off forecast' : ''),
       `Surge tank ${fmt(r.sump_L)} L, ${fmt(r.sump_g)} g · Protein A cycles ${Math.round(r.cycles)}`,
       `Buffer use ${fmt(r.buffer_L_h)} L/h · wastewater ${fmt(r.ww_total_Lh)} L/h`,
       `Drug substance so far ${fmt(r.ds_g_cum / 1000)} kg`,
@@ -620,7 +626,7 @@
     const eq = {lv: {}, vt: {}, col: {}};
     equipment(r0, r, c, vals, eq);
     const ro = readout(i, r0, r);
-    return {i, r0, r, c, vals, eq, lines: ro.lines, clock: ro.clock, fc: ro.fc};
+    return {i, r0, r, c, vals, eq, lines: ro.lines, clock: ro.clock, fc: ro.fc, watch: watchOn(r0)};
   }
 
   function apply(st) {
