@@ -3,9 +3,10 @@ icb_sizing.py — equipment sizing for the IDB mAb line
 NavNevAI_mAbWasteWater · CarbonTesseract 2026
 
 size_equipment(p, res, history, sol_day)  sizes every unit from one hourly run (called by the simulator)
-size_portfolio(p, seed)                   worst case across all molecules (/api/icb/sizing)
+size_portfolio(p, seed)                   worst case across all titre curves incl. the biology model (/api/icb/sizing)
 
   Bioreactors   working volume is an input (sets the permeate flow): nominal size, media bags, pumps
+  Seed train    N-3, N-2, N-1 and N vessels from icb_bio.seed_train (biology and/or rules of thumb)
   TFF F-101     membrane area from the peak permeate flow at a design flux
   Protein A     resin per train from the peak g/day and the cycle limit (load + recovery time)
   Vessels       peak working volume × margin / fill, next standard size
@@ -23,7 +24,8 @@ Changing a column, filter or membrane moves the vessel peaks: apply and re-run u
 from __future__ import annotations
 import copy
 import math
-from icb_process import WASTE_STREAMS, BUFFER_OPS, SOLUTIONS, TITRE_PROFILES, capture_cycle, det_frac
+from icb_process import (WASTE_STREAMS, BUFFER_OPS, SOLUTIONS, TITRE_PROFILES, capture_cycle, det_frac,
+                         profile_names)
 
 VESSEL_SIZES = (1, 2, 5, 10, 20, 50, 100, 200, 300, 500, 1000, 1500, 2000, 3000, 5000, 10000, 20000, 50000)
 TOTE_SIZES = (10, 20, 50, 100, 200, 500, 1000)
@@ -177,14 +179,18 @@ def size_equipment(p, res, history, sol_day=None):
     n1, br = p.n1, p.bioreactor
     n1s = (res.get("design") or {}).get("n1") or {}
     if n1.enabled:
-        rows.append(_row("R-101", "N-1 perfusion seed, working volume", n1.V_L, "L", _std(n1.V_L / sz.vessel_fill),
+        batch_n1 = n1.VVD <= 0                                  # batch N-1 from the seed train
+        rows.append(_row("R-101", ("N-1 batch seed (seed-train stage)" if batch_n1 else "N-1 perfusion seed")
+                         + ", working volume", n1.V_L, "L", _std(n1.V_L / sz.vessel_fill),
                          n1.V_L, f"nominal = working / {sz.vessel_fill:g} fill; seeds N at {n1s.get('n_seed_vcd')} "
                          f"×10⁶/mL after {n1s.get('days')} d ({n1s.get('reason')})"))
-        m1 = n1.VVD * n1.V_L
+        m1 = n1.VVD * n1.V_L if n1.VVD > 0 else n1.V_L          # batch N-1: one fill per day of supply
         rows.append(_row("BAG-101", "N-1 media hold", m1 * sz.media_days, "L",
                          _std(m1 * sz.media_days * sz.vessel_margin), None,
-                         f"{n1.VVD:g} VVD × {n1.V_L:g} L × {sz.media_days:g} d × {sz.vessel_margin:g}"))
-        _pump(rows, sz, "P-100", "N-1 media / permeate pump", m1 / 24.0, f"{n1.VVD:g} VVD × {n1.V_L:g} L / 24 h")
+                         (f"batch: one fill of {n1.V_L:.1f} L" if batch_n1 else f"{n1.VVD:g} VVD × {n1.V_L:g} L")
+                         + f" × {sz.media_days:g} d × {sz.vessel_margin:g}"))
+        _pump(rows, sz, "P-100", "N-1 media fill pump" if batch_n1 else "N-1 media / permeate pump", m1 / 24.0,
+              f"one fill of {n1.V_L:.1f} L in 24 h" if batch_n1 else f"{n1.VVD:g} VVD × {n1.V_L:g} L / 24 h")
     Fin = max((_n(r.get("Fin_Lh")) for r in history), default=0.0)
     Fh = max((_n(r.get("Fh_Lh")) for r in history), default=0.0)
     rows.append(_row("R-102", "N reactor, working volume", br.V_L, "L", _std(br.V_L / sz.vessel_fill), br.V_L,
@@ -196,6 +202,23 @@ def size_equipment(p, res, history, sol_day=None):
     a = Fh / max(sz.tff_flux_LMH, 1e-9)
     rows.append(_row("F-101", "TFF cell-removal membrane area", a, "m²", _ceil(a * am, 0.01), None,
                      f"peak permeate {Fh:.2f} L/h at {sz.tff_flux_LMH:g} LMH × {am:g}"))
+
+    # seed train N-3 → N (icb_bio.py: biology and/or rules of thumb)
+    tr = (res.get("bio") or {}).get("seed_train") or {}
+    if tr.get("stages"):
+        rows = group("Seed train N-3 → N (biology / rules of thumb)")
+        cols = tr["stages"] + [tr["n"]]
+        bad = {i: [] for i in range(len(cols))}
+        for c in tr.get("checks", []):
+            for i, cell in enumerate(c["cells"]):
+                if cell and not cell["ok"]:
+                    bad[i].append(f"{c['label']}: {cell['text']}")
+        for i, s in enumerate(cols):
+            basis = (f"{tr['basis_label']}; seed {s['x0']:g} → transfer {s['xt']:.2f} ×10⁶/mL in "
+                     f"{s['duration_d']:.2f} d; max fill {s['max_fill']:g}" if s["key"] != "n"
+                     else f"N from {s.get('source', '')}; seeded at {s['x0']:g} ×10⁶/mL")
+            rows.append(_row(s["tag"], f"{s['name']} {str(s.get('type', '')).lower()}, working volume",
+                             s["V_L"], "L", s["vessel_L"], None, basis, "; ".join(bad[i])))
 
     # Protein A
     rows = group("Protein A capture (Brij-9 in-line)")
@@ -433,7 +456,7 @@ def size_equipment(p, res, history, sol_day=None):
 # ── worst case across molecules ──────────────────────────────────────
 def size_portfolio(p, seed=0):
     from icb_dynamic import ICBSimulator          # here to avoid a circular import
-    names = list(TITRE_PROFILES) + (["custom"] if p.upstream.custom_points else [])
+    names = profile_names(p)
     best, order, gnames, sug, notes, labels = {}, [], [], {}, [], []
     for name in names:
         q = copy.deepcopy(p)
