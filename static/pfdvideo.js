@@ -38,6 +38,7 @@
   const KDASH = {pp: [], pb: [6, 3], pw: [6, 3], pa: [6, 3], pd: [6, 3], px: [2, 3], ps: [9, 4]};
   const TITLE_S = 3.2, FOCUS_S = 2.8, FLY_S = 0.9, OUT_S = 1.0, END_S = 5;
   const MAX_GAP_S = 5;   // longest quiet stretch (no new unit) in film seconds
+  const WATERMARK = 'CarbonTesseract 2026';
 
   function U(key, short, title, tag, util, box, act, desc) { return {key, short, title, tag, util: !!util, box, act, desc}; }
   // flow order; box = [x0, y0, x1, y1] in diagram coordinates; act = streams that put the unit in the circuit
@@ -623,6 +624,16 @@
     c.restore();
   }
 
+  function watermark(c) {
+    c.save();
+    c.globalAlpha = 0.75;
+    c.font = `600 15px ${FONT}`;
+    c.textAlign = 'right';
+    c.fillStyle = GREY;
+    c.fillText(WATERMARK, VW - 24, VH - 6);
+    c.restore();
+  }
+
   function frame(c, t) {
     const P = PLAN, SC = c.canvas.width / VW;
     const s = segAt(t), lt = t - s.t0, p = s.dur > 0 ? clamp(lt / s.dur) : 1;
@@ -658,6 +669,7 @@
     hud(c, t, clock, st);
     if (s.type === 'title') titleCard(c, lt, s.dur);
     if (s.type === 'end') endCard(c, t, lt);
+    watermark(c);
   }
 
   // ── preview and recording ──
