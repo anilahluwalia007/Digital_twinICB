@@ -149,8 +149,9 @@ tr.up td{background:#fef3c7}
 .sgrid.two{grid-template-columns:repeat(2,minmax(0,1fr))}
 .sgrid > .card{margin:0}
 .span-all{grid-column:1/-1}
-.sheet .chart{height:auto;aspect-ratio:3/2;min-height:200px}
-.sheet .chart.wide{aspect-ratio:7/2}
+.sgrid.charts{grid-template-columns:minmax(0,1fr)}
+.sheet .chart{height:clamp(300px,28vw,420px)}
+.sheet .chart.wide{height:clamp(320px,30vw,460px)}
 /* headline figures and grouped key figures */
 .hero{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-bottom:10px}
 .hero .kpi{border-top:3px solid var(--ac)}
@@ -176,8 +177,9 @@ tr.up td{background:#fef3c7}
   .sheethead h2{font-size:14px}
   .sheet .sgrid{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:6px 0}
   .sheet .sgrid.two{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .sheet .chart{aspect-ratio:auto;min-height:0;height:58mm}
-  .sheet .chart.wide{height:70mm}
+  .sheet .sgrid.charts{grid-template-columns:minmax(0,1fr)}
+  .sheet .chart{height:82mm}
+  .sheet .chart.wide{height:90mm}
   .sheet .card h3{font-size:11px;margin-bottom:4px}
   .hero{grid-template-columns:repeat(6,1fr);gap:6px}
   .hero .kpi .v{font-size:16px}
@@ -185,6 +187,108 @@ tr.up td{background:#fef3c7}
   #bioRes .kpis{grid-template-columns:repeat(7,1fr);gap:4px}
   #bioRes .kpi{padding:4px 6px}
   #bioRes .kpi .v{font-size:12px}
+}
+</style>
+<style>
+/* ── NevAI, events and alarms: blue glass panel ───────────────────── */
+.glass-wrap{position:relative;overflow:hidden;border-radius:18px;padding:16px;margin:10px 0;color:#fff;
+  background:linear-gradient(135deg,#0a2f5c 0%,#16498c 48%,#2a72c2 100%);
+  box-shadow:0 10px 30px rgba(10,47,92,.25)}
+.glass-wrap::before,.glass-wrap::after{content:'';position:absolute;border-radius:50%;pointer-events:none}
+.glass-wrap::before{width:520px;height:520px;right:-140px;top:-220px;background:radial-gradient(circle,rgba(125,211,252,.45),transparent 65%)}
+.glass-wrap::after{width:420px;height:420px;left:-160px;bottom:-200px;background:radial-gradient(circle,rgba(99,102,241,.35),transparent 65%)}
+.glass{position:relative;z-index:1;background:rgba(255,255,255,.11);border:1px solid rgba(255,255,255,.26);border-radius:14px;
+  -webkit-backdrop-filter:blur(14px) saturate(140%);backdrop-filter:blur(14px) saturate(140%);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.25),0 8px 24px rgba(5,25,60,.18)}
+.gpanel{padding:14px 16px}
+.gpanel + .gpanel{margin-top:14px}
+.ghead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.geyebrow{font-size:10.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#93c5fd}
+.ghead h3{color:#fff;font-size:15px;margin:2px 0 0}
+.gpill{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:5px 12px;border-radius:999px;
+  border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.14);color:#fff}
+.gpill.act{background:rgba(52,211,153,.25);border-color:rgba(110,231,183,.8);color:#d1fae5}
+.gpill.adv{background:rgba(96,165,250,.25);border-color:rgba(147,197,253,.85);color:#dbeafe}
+.gpill.off{background:rgba(148,163,184,.25);color:#e2e8f0}
+.gstats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.gstat{background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.22);border-top:3px solid #93c5fd;border-radius:12px;padding:10px 12px}
+.gstat.warn{border-top-color:#fcd34d}.gstat.crit{border-top-color:#fca5a5}.gstat.ok{border-top-color:#6ee7b7}
+.gstat .l{font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#bfdbfe}
+.gstat .v{font-size:22px;font-weight:700;color:#fff;margin-top:2px}
+.gstat .v small{font-size:12px;font-weight:600;color:#bfdbfe;margin-left:2px}
+.gstat .s{font-size:11px;color:#cfe0ff;margin-top:2px}
+.gbar{position:relative;height:6px;border-radius:999px;background:rgba(255,255,255,.18);margin:8px 0 4px}
+.gbar i{position:absolute;left:0;top:0;bottom:0;border-radius:999px;background:linear-gradient(90deg,#fcd34d,#f87171)}
+.gbar b{position:absolute;top:-4px;width:2px;height:14px;background:#fff;border-radius:1px}
+.gh4{color:#bfdbfe;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin:16px 0 8px}
+.gcompare{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.gcmp{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.2);border-radius:12px;padding:10px 12px}
+.gcmp .l{font-size:11px;font-weight:600;color:#bfdbfe;margin-bottom:6px}
+.gcmp .row{display:flex;justify-content:space-between;font-size:12px;color:#dbeafe;padding:2px 0}
+.gcmp .row b{color:#fff}
+.gcmp .d{margin-top:6px;font-size:11px;font-weight:700;display:inline-block;padding:2px 8px;border-radius:999px}
+.gcmp .d.better{background:rgba(52,211,153,.25);color:#a7f3d0}
+.gcmp .d.worse{background:rgba(248,113,113,.25);color:#fecaca}
+.gcmp .d.eq{background:rgba(255,255,255,.14);color:#dbeafe}
+.gnote{font-size:11px;color:#bfdbfe;margin-top:8px}
+.gactions{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:14px}
+.glass-wrap button.ghost{background:rgba(255,255,255,.14);color:#fff;border:1px solid rgba(255,255,255,.55)}
+.glass-wrap button.ghost:hover{background:rgba(255,255,255,.24)}
+.glass-wrap .muted{color:#bfdbfe}
+.glass-wrap table{color:#e6f0ff;margin-top:10px}
+.glass-wrap th{color:#bfdbfe;font-weight:600;border-bottom-color:rgba(255,255,255,.3)}
+.glass-wrap td{border-bottom-color:rgba(255,255,255,.14)}
+.gcallout,.fcnote{display:flex;gap:10px;align-items:flex-start;border-radius:12px;padding:10px 12px}
+.gcallout{background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.25);color:#dbeafe}
+.gcallout svg,.fcnote svg{flex:none;margin-top:1px}
+.gcallout b,.fcnote b{display:block;color:#fff;font-size:12.5px}
+.fcnote{background:linear-gradient(135deg,rgba(22,73,140,.94),rgba(42,114,194,.9));border:1px solid rgba(255,255,255,.35);
+  color:#dbeafe;font-size:12px;margin-bottom:8px;box-shadow:0 6px 18px rgba(10,47,92,.18);
+  -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+/* filter chips */
+.gfilter{display:flex;gap:4px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.22);border-radius:999px;padding:3px}
+.gfilter button{background:transparent;color:#dbeafe;border-radius:999px;padding:5px 12px;font-size:12px}
+.gfilter button.on{background:#fff;color:#16498c}
+/* timeline */
+.evlog{position:relative;margin-top:14px}
+.evlog::before{content:'';position:absolute;left:149px;top:10px;bottom:10px;width:2px;background:linear-gradient(#93c5fd,rgba(147,197,253,.15))}
+.evitem{display:grid;grid-template-columns:120px 36px minmax(0,1fr);gap:12px;align-items:start;padding:6px 0}
+.evitem[hidden]{display:none}
+.evtime{text-align:right;padding-top:7px}
+.evtime b{display:block;font-size:12.5px;color:#fff;white-space:nowrap}
+.evtime span{font-size:11px;color:#93c5fd}
+.evdot{position:relative;z-index:1;width:36px;height:36px;border-radius:50%;display:grid;place-items:center;color:#dbeafe;
+  background:rgba(96,165,250,.28);border:1px solid rgba(147,197,253,.85);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+.evbody{background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.22);border-left:3px solid #93c5fd;border-radius:12px;padding:9px 12px}
+.evhead{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:3px}
+.evcat{font-weight:700;font-size:12.5px;color:#fff}
+.evsev{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:2px 8px;border-radius:999px;background:rgba(96,165,250,.3);color:#dbeafe}
+.evcount{font-size:11px;font-weight:700;color:#fff;background:rgba(255,255,255,.16);border-radius:999px;padding:2px 8px}
+.evmsg{color:#e6f0ff;font-size:12.5px;line-height:1.45}
+.sev-warn .evdot{background:rgba(251,191,36,.25);border-color:rgba(253,224,71,.85);color:#fde68a}
+.sev-warn .evbody{border-left-color:#fcd34d}.sev-warn .evsev{background:rgba(251,191,36,.25);color:#fde68a}
+.sev-crit .evdot{background:rgba(248,113,113,.28);border-color:rgba(252,165,165,.9);color:#fecaca}
+.sev-crit .evbody{border-left-color:#fca5a5}.sev-crit .evsev{background:rgba(248,113,113,.28);color:#fecaca}
+.sev-ok .evdot{background:rgba(52,211,153,.25);border-color:rgba(110,231,183,.85);color:#a7f3d0}
+.sev-ok .evbody{border-left-color:#6ee7b7}.sev-ok .evsev{background:rgba(52,211,153,.25);color:#a7f3d0}
+.evmore summary{cursor:pointer;color:#93c5fd;font-size:11.5px;margin-top:5px}
+.evmore ul{list-style:none;margin:6px 0 0;padding:0}
+.evmore li{display:flex;gap:12px;font-size:11.5px;color:#dbeafe;padding:3px 0;border-top:1px solid rgba(255,255,255,.1)}
+.evmore li span{min-width:72px;color:#93c5fd}
+.evempty{color:#bfdbfe;padding:10px 0}
+@media (max-width:900px){.gstats,.gcompare{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:700px){
+  .evitem{grid-template-columns:78px 30px minmax(0,1fr);gap:8px}
+  .evdot{width:30px;height:30px}.evdot svg{width:15px;height:15px}
+  .evlog::before{left:100px}
+}
+@media print{
+  .glass-wrap{border-radius:10px;padding:10px;box-shadow:none}
+  .glass,.evdot,.fcnote{-webkit-backdrop-filter:none;backdrop-filter:none}
+  .evitem,.gstat,.gcmp{break-inside:avoid}
+  .evitem[hidden]{display:grid!important}
+  .evmore[open] ul,.evmore ul{display:block}
+  .gstat .v{font-size:16px}
 }
 </style>
 </head>
@@ -391,7 +495,7 @@ tr.up td{background:#fef3c7}
       <div class="sheethead"><h2><span>2</span>Biology and seed train</h2>
         <p>Production culture (Bio_sim) and seed stages N-3 → N-1 (Seed_sim).</p></div>
       <div class="card"><h3>Biology model (Bio_sim): key results</h3><div id="bioRes"></div></div>
-      <div class="sgrid">
+      <div class="sgrid charts">
         <div class="card"><h3>Titre and cell density</h3><div class="chart"><canvas id="cBioTitre"></canvas></div></div>
         <div class="card"><h3>Viability, growth and death rates</h3><div class="chart"><canvas id="cBioRates"></canvas></div></div>
         <div class="card"><h3>Nutrients, waste and osmolality</h3><div class="chart"><canvas id="cBioMetab"></canvas></div></div>
@@ -405,7 +509,7 @@ tr.up td{background:#fef3c7}
     <div class="sheet" id="sheet-process">
       <div class="sheethead"><h2><span>3</span>Harvest and capture</h2>
         <p>Permeate titre, product flow into Protein A, surge tank, cells and downstream batching.</p></div>
-      <div class="sgrid">
+      <div class="sgrid charts">
         <div class="card"><h3>Permeate titre and NevAI 24 h forecast</h3><div class="chart"><canvas id="cTitre"></canvas></div></div>
         <div class="card"><h3>Product harvested and Protein A cycles per day</h3><div class="chart"><canvas id="cGrams"></canvas></div></div>
         <div class="card"><h3>Harvest surge tank</h3><div class="chart"><canvas id="cSump"></canvas></div></div>
@@ -419,7 +523,7 @@ tr.up td{background:#fef3c7}
     <div class="sheet" id="sheet-solutions">
       <div class="sheethead"><h2><span>4</span>Solutions and wastewater</h2>
         <p>Solution demand by unit, NevAI forecasts, and wastewater by stream.</p></div>
-      <div class="sgrid">
+      <div class="sgrid charts">
         <div class="card"><h3>Solutions per day by unit (incl. WFI)</h3><div class="chart"><canvas id="cBuffer"></canvas></div></div>
         <div class="card"><h3>Solutions next 24 h: NevAI forecast vs actual</h3><div class="chart"><canvas id="cBufFc"></canvas></div></div>
         <div class="card"><h3>Wastewater flow and NevAI forecast</h3><div class="chart"><canvas id="cWw"></canvas></div></div>
@@ -447,15 +551,32 @@ tr.up td{background:#fef3c7}
     <div class="sheet" id="sheet-nevai">
       <div class="sheethead"><h2><span>6</span>NevAI and events</h2>
         <p>NevAI actions, watch flags, buffer preparation, and the run's event and alarm log.</p></div>
-      <div class="card" id="nevaiCard"><h3>NevAI in operation: actions, watch and buffer preparation</h3>
-        <div id="nevaiOut" class="small"></div>
-        <div class="pfdbar no-print" style="margin-top:8px">
-          <button id="benefitBtn" type="button" class="ghost">Measure NevAI benefit (advisory vs acting)</button>
-          <span id="benefitInfo" class="muted">Runs the selected case twice with the same seed.</span>
+      <div class="glass-wrap">
+        <div class="glass gpanel" id="nevaiCard">
+          <div class="ghead">
+            <div><div class="geyebrow">NevAI in operation</div><h3>Actions, watch and buffer preparation</h3></div>
+            <span id="nevaiMode" class="gpill">—</span>
+          </div>
+          <div id="nevaiOut"></div>
+          <div class="gactions no-print">
+            <button id="benefitBtn" type="button" class="ghost">Measure NevAI benefit (advisory vs acting)</button>
+            <span id="benefitInfo" class="muted">Runs the selected case twice with the same seed.</span>
+          </div>
+          <div id="benefitOut"></div>
         </div>
-        <div id="benefitOut"></div>
+        <div class="glass gpanel" id="eventsCard">
+          <div class="ghead">
+            <div><div class="geyebrow">Run log</div><h3>Events and alarms</h3></div>
+            <div class="gfilter no-print" id="evFilter" role="group" aria-label="Filter the log">
+              <button type="button" data-f="all" class="on">All</button>
+              <button type="button" data-f="alarm">Alarms</button>
+              <button type="button" data-f="event">Events</button>
+            </div>
+          </div>
+          <div id="evSummary" class="gstats"></div>
+          <div id="events" class="evlog"></div>
+        </div>
       </div>
-      <div class="card"><h3>Events and alarms</h3><table id="events"></table></div>
     </div>
   </section>
 
@@ -961,7 +1082,8 @@ function fcNotes(j) {
     let n = card.querySelector('.fcnote');
     if (!reason) { if (n) n.remove(); return; }
     if (!n) { n = document.createElement('div'); n.className = 'fcnote'; card.insertBefore(n, card.querySelector('.chart')); }
-    n.textContent = 'No NevAI forecast in this run: ' + reason + '. Run again once the status shows "NevAI: ready".';
+    n.innerHTML = icon('info') + '<div><b>No NevAI forecast in this run</b>' + esc(reason) +
+      '. Run again once the status shows “NevAI: ready”.</div>';
   });
 }
 
@@ -1072,9 +1194,7 @@ function tables(j) {
   $('losses').innerHTML = '<tr><th>Loss point</th><th>g</th></tr>' +
     Object.entries(j.kpi.losses_g).filter(([, v]) => v > 0)
       .map(([k, v]) => `<tr><td>${esc(LOSS_LABEL[k] || k.replace(/_/g, ' '))}</td><td>${v.toLocaleString()}</td></tr>`).join('');
-  $('events').innerHTML = '<tr><th>Day</th><th>Type</th><th>Message</th></tr>' +
-    (j.events.length ? j.events.map(e => `<tr><td>${e.day}</td><td>${e.type}</td><td>${esc(e.msg)}</td></tr>`).join('')
-                     : '<tr><td colspan="3" class="muted">No events</td></tr>');
+  renderEvents(j.events);
   dspTables(j);
 }
 
@@ -1373,26 +1493,115 @@ function render(j) {
   try { renderNevai(j); } catch (e) { $('nevaiOut').innerHTML = `<div class="err">NevAI view: ${esc(e.message)}</div>`; }
 }
 
+// ── icons ──────────────────────────────────────────────────────────
+const IC = {
+  alarm: '<path d="M12 3 2 20h20L12 3z"/><path d="M12 10v4M12 17h.01"/>',
+  trend: '<path d="M3 7l6 6 4-4 8 8"/><path d="M15 17h6v-6"/>',
+  flask: '<path d="M9 3h6M10 3v6L4.5 18.5A1.7 1.7 0 0 0 6 21h12a1.7 1.7 0 0 0 1.5-2.5L14 9V3"/><path d="M7 15h10"/>',
+  column: '<rect x="7" y="3" width="10" height="18" rx="2"/><path d="M7 8h10M7 16h10"/>',
+  lot: '<path d="M21 8 12 3 3 8v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
+  filter: '<path d="M3 4h18l-7 8v6l-4 2v-8L3 4z"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>'};
+const icon = k => `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" ` +
+  `stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC[k] || IC.info}</svg>`;
+
+// ── events and alarms: grouped timeline ────────────────────────────
+const EV_RULES = [   // [test, category, icon, severity]
+  [e => e.type === 'alarm' && /check/i.test(e.msg), 'Deviation from forecast trend', 'alarm', 'crit'],
+  [e => e.type === 'alarm' && /forecast/i.test(e.msg), 'Forecast warning', 'trend', 'warn'],
+  [e => e.type === 'alarm', 'Alarm', 'alarm', 'warn'],
+  [e => /inoculat/i.test(e.msg), 'N reactor inoculated', 'flask', 'info'],
+  [e => /Protein A/i.test(e.msg), 'Capture started', 'column', 'info'],
+  [e => /^Lot\s/i.test(e.msg), 'Drug substance lot filled', 'lot', 'ok'],
+  [e => /filter/i.test(e.msg), 'Filter change', 'filter', 'info'],
+  [e => /ended|run out|runs out/i.test(e.msg), 'N run ended', 'stop', 'info'],
+  [() => true, 'Event', 'info', 'info']];
+const SEV_LAB = {crit: 'Action', warn: 'Warning', info: 'Event', ok: 'Complete'};
+let EVF = 'all';
+function evClass(e) { const r = EV_RULES.find(([t]) => t(e)); return {cat: r[1], ic: r[2], sev: r[3]}; }
+function groupEvents(list) {          // repeated alarms (same message, numbers aside) collapse into one entry
+  const out = [];
+  for (const e of list || []) {
+    const key = e.type + '|' + String(e.msg).replace(/[-+]?\d+(?:\.\d+)?/g, '#');
+    const last = out[out.length - 1];
+    if (last && last.key === key && e.type === 'alarm') last.items.push(e);
+    else out.push(Object.assign({key, items: [e], kind: e.type === 'alarm' ? 'alarm' : 'event'}, evClass(e)));
+  }
+  return out;
+}
+function applyEvFilter() {
+  document.querySelectorAll('#evFilter button').forEach(b => b.classList.toggle('on', b.dataset.f === EVF));
+  document.querySelectorAll('#events .evitem').forEach(it => { it.hidden = EVF !== 'all' && it.dataset.kind !== EVF; });
+}
+function renderEvents(list) {
+  list = list || [];
+  const G = groupEvents(list), A = list.filter(e => e.type === 'alarm');
+  const lots = list.filter(e => /^Lot\s/i.test(e.msg)).length, firstA = A[0];
+  const tile = (l, v, sub, cls) => `<div class="gstat ${cls}"><div class="l">${l}</div><div class="v">${v}</div>` +
+    (sub ? `<div class="s">${sub}</div>` : '') + '</div>';
+  $('evSummary').innerHTML =
+    tile('Alarms', fx(A.length, 0), A.length ? fx(G.filter(g => g.kind === 'alarm').length, 0) + ' distinct conditions' : 'none raised', A.length ? 'warn' : 'ok') +
+    tile('Process events', fx(list.length - A.length, 0), '', 'info') +
+    tile('Lots filled', fx(lots, 0), '', 'ok') +
+    tile('First alarm', firstA ? 'Day ' + fx(firstA.day) : '—', firstA ? fx(firstA.day * 24, 0) + ' h into the campaign' : '', firstA ? 'warn' : 'ok');
+  if (!G.length) { $('events').innerHTML = '<div class="evempty">No events or alarms in this run.</div>'; return; }
+  $('events').innerHTML = G.map(g => {
+    const f = g.items[0], l = g.items[g.items.length - 1], n = g.items.length;
+    const more = n > 1 ? `<details class="evmore"><summary>Show all ${n} readings</summary><ul>` +
+      g.items.map(e => `<li><span>Day ${fx(e.day)}</span>${esc(e.msg)}</li>`).join('') + '</ul></details>' : '';
+    return `<div class="evitem sev-${g.sev}" data-kind="${g.kind}">` +
+      `<div class="evtime"><b>Day ${fx(f.day)}${n > 1 ? ' → ' + fx(l.day) : ''}</b><span>${fx(f.day * 24, 0)} h</span></div>` +
+      `<div class="evdot">${icon(g.ic)}</div>` +
+      `<div class="evbody"><div class="evhead"><span class="evcat">${esc(g.cat)}</span><span class="evsev">${SEV_LAB[g.sev]}</span>` +
+      (n > 1 ? `<span class="evcount">×${n}</span>` : '') + `</div><div class="evmsg">${esc(f.msg)}</div>${more}</div></div>`;
+  }).join('');
+  applyEvFilter();
+}
+
 // ── NevAI in operation: actions, watch, buffer preparation ──────────
 function renderNevai(j) {
-  const n = j.nevai;
+  const n = j.nevai, mode = $('nevaiMode');
   $('benefitOut').innerHTML = '';
-  if (!n) { $('nevaiOut').innerHTML = `<span class="muted">No NevAI in this run: ${esc(fcReason(j) || 'forecaster off')}.</span>`; return; }
+  if (!n) {
+    mode.textContent = 'Off'; mode.className = 'gpill off';
+    $('nevaiOut').innerHTML = `<div class="gcallout">${icon('info')}<div><b>No NevAI in this run</b>${esc(fcReason(j) || 'forecaster off')}.</div></div>`;
+    return;
+  }
+  mode.textContent = n.acting ? 'Acting' : 'Advisory';
+  mode.className = 'gpill ' + (n.acting ? 'act' : 'adv');
+  mode.title = 'control.nevai_act';
   const w = n.watch || {}, pr = n.prep;
-  let h = `<div class="note">Mode: <b>${n.acting ? 'acting' : 'advisory'}</b> (control.nevai_act) · ` +
-    `early partial Protein A loads: <b>${fx(n.partial_loads, 0)}</b></div>` +
-    `<div class="note">Watch: ${fx(w.flag_hours, 0)} h flagged · first flag ` +
-    `${w.first_flag_n_day === null || w.first_flag_n_day === undefined ? '—' : 'N day ' + fx(w.first_flag_n_day)} · ` +
-    `peak score ${fx(w.peak_score, 3)} (threshold ${fx(w.threshold, 2)})</div>`;
-  if ((n.detection || []).length) h += '<table><tr><th>Disturbance</th><th class="num">N day</th><th class="num">Flagged after</th></tr>' +
+  const score = nz(w.peak_score), thr = nz(w.threshold), top = (Math.max(score, thr) * 1.2) || 1;
+  const flagged = !isNone(w.first_flag_n_day);
+  const tile = (l, v, sub, cls) => `<div class="gstat ${cls}"><div class="l">${l}</div><div class="v">${v}</div>` +
+    (sub ? `<div class="s">${sub}</div>` : '') + '</div>';
+  let h = '<div class="gstats">' +
+    tile('Early partial Protein A loads', fx(n.partial_loads, 0),
+         n.acting ? 'NevAI acts on its forecasts' : 'Advisory: forecasts only, no actions', 'info') +
+    tile('Watch flagged', fx(w.flag_hours, 0) + '<small>h</small>', 'hours above the watch threshold', nz(w.flag_hours) > 0 ? 'warn' : 'ok') +
+    tile('First flag', flagged ? 'N day ' + fx(w.first_flag_n_day) : '—', flagged ? '' : 'never flagged', flagged ? 'warn' : 'ok') +
+    `<div class="gstat ${score > thr ? 'crit' : 'ok'}"><div class="l">Peak watch score</div><div class="v">${fx(score, 3)}</div>` +
+    `<div class="gbar" title="score vs threshold"><i style="width:${Math.min(100, 100 * score / top)}%"></i>` +
+    `<b style="left:${Math.min(100, 100 * thr / top)}%"></b></div>` +
+    `<div class="s">threshold ${fx(thr, 2)} · ${score > thr && thr > 0 ? fx(score / thr, 1) + '× threshold' : 'below threshold'}</div></div>` +
+    '</div>';
+  if ((n.detection || []).length) h += '<h4 class="gh4">Disturbance detection</h4><table><tr><th>Disturbance</th><th class="num">N day</th><th class="num">Flagged after</th></tr>' +
     n.detection.map(d => `<tr><td>${esc(d.type)}</td><td class="num">${fx(d.n_day)}</td><td class="num">` +
-      `${d.detected_after_h === null || d.detected_after_h === undefined ? 'not flagged' : fx(d.detected_after_h, 0) + ' h'}</td></tr>`).join('') + '</table>';
-  if (pr) h += '<h4>Buffer preparation: NevAI forecast vs reactive (last 24 h)</h4><table><tr><th></th>' +
-    '<th class="num">Shortfall L</th><th class="num">Hours short</th><th class="num">Hold peak L</th><th class="num">Peak prep L/h</th></tr>' +
-    ['reactive', 'nevai'].map(k => `<tr><td>${k === 'nevai' ? 'NevAI forecast' : 'Reactive'}</td>` +
-      `<td class="num">${fx(pr[k].shortfall_L, 0)}</td><td class="num">${fx(pr[k].short_hours, 0)}</td>` +
-      `<td class="num">${fx(pr[k].hold_peak_L, 0)}</td><td class="num">${fx(pr[k].prep_peak_Lh, 1)}</td></tr>`).join('') +
-    `</table><div class="muted small">Same prep capacity for both: ${fx(pr.prep_capacity_Lh, 1)} L/h.</div>`;
+      `${isNone(d.detected_after_h) ? 'not flagged' : fx(d.detected_after_h, 0) + ' h'}</td></tr>`).join('') + '</table>';
+  if (pr) {
+    const M = [['Shortfall', 'shortfall_L', 'L', 0], ['Hours short', 'short_hours', 'h', 0],
+               ['Hold peak', 'hold_peak_L', 'L', 0], ['Peak preparation rate', 'prep_peak_Lh', 'L/h', 1]];
+    h += '<h4 class="gh4">Buffer preparation · NevAI forecast vs reactive (last 24 h)</h4><div class="gcompare">' +
+      M.map(([l, key, u, d]) => {
+        const a = nz(pr.reactive[key]), b = nz(pr.nevai[key]), dl = b - a;
+        const cls = Math.abs(dl) < 1e-9 ? 'eq' : dl < 0 ? 'better' : 'worse';
+        return `<div class="gcmp"><div class="l">${l}</div>` +
+          `<div class="row"><span>Reactive</span><b>${fx(a, d)} ${u}</b></div>` +
+          `<div class="row"><span>NevAI forecast</span><b>${fx(b, d)} ${u}</b></div>` +
+          `<div class="d ${cls}">${cls === 'eq' ? 'no change' : (dl > 0 ? '+' : '−') + fx(Math.abs(dl), d) + ' ' + u}</div></div>`;
+      }).join('') + `</div><div class="gnote">Same preparation capacity for both: ${fx(pr.prep_capacity_Lh, 1)} L/h. Lower is better for every figure.</div>`;
+  }
   $('nevaiOut').innerHTML = h;
 }
 
@@ -1605,6 +1814,7 @@ async function init() {
   document.querySelectorAll('#tabs button').forEach(b => { b.onclick = () => showTab(b.dataset.tab); });
   showTab(location.hash.slice(1) || 'cases');
   initSheets();
+  document.querySelectorAll('#evFilter button').forEach(b => { b.onclick = () => { EVF = b.dataset.f; applyEvFilter(); }; });
   const [def, cd] = await Promise.all([api('/api/icb/defaults'), api('/api/icb/cases')]);
   CASEDEF = cd;
   OPS = def.buffer_ops || OPS;
