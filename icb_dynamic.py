@@ -465,8 +465,9 @@ class ICBSimulator:
             # ── NevAI watch: measured titre against the forecast issued lead_h earlier ──
             w_score = watch.score(h, titre_m) if (watch is not None and usp_on) else None
             if watch is not None and watch.flag(h, w_score):
-                alarm(h, "nevai_watch", f"Permeate titre is {100 * w_score:.0f} % off the NevAI forecast "
-                      f"trend: check the PAT sensor, the culture and the TFF")
+                alarm(h, "nevai_watch", f"Permeate titre has drifted from the NevAI forecast: the forecast error "
+                      f"shifted by {100 * w_score:.0f} % against its usual level; check the PAT sensor, "
+                      f"the culture and the TFF")
 
             # ── record ──
             ww_h = sum(ww.values())

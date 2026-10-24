@@ -8,7 +8,9 @@ Used by icb_dynamic.ICBSimulator when a forecaster is loaded.
                 outlive its hold limit before a full load is ready (only with control.nevai_act)
   Watch         compares each measured permeate titre with the forecast issued nevai_watch_lead_h
                 earlier and flags a shift in the forecast error (sensor fault, productivity drop,
-                fouling) before the lab sees it; reports only
+                fouling) before the lab sees it; reports only. The error is a share of the forecast,
+                but never of less than nevai_watch_floor_gL (default 1 g/L), so wobble at start-up
+                titres of a few tenths of a g/L does not count as a shift
   prep_compare  buffer preparation driven by the NevAI 24 h forecast against a reactive rule
                 (prepare what was used in the last 24 h): same prep capacity, same hourly use
   report        everything above for result["nevai"]
@@ -17,6 +19,9 @@ Nothing here changes the plant unless control.nevai_act is True.
 """
 from __future__ import annotations
 import numpy as np
+
+WATCH_FLOOR_GL = 1.0      # watch error = (measured - forecast) / max(forecast, this); override with
+                          # control.nevai_watch_floor_gL if that parameter is added
 
 
 class HoldGuard:
@@ -44,8 +49,9 @@ class Watch:
         self.lead = max(1, int(round(ct.nevai_watch_lead_h)))
         self.win = max(2, int(round(ct.nevai_watch_window_h)))
         self.base = max(6, int(round(ct.nevai_watch_baseline_h)))
-        self.base_min = min(12, self.base)          # baseline points needed before scoring
+        self.base_min = min(24, self.base)          # baseline points needed before scoring
         self.thr = float(ct.nevai_watch_threshold)
+        self.floor = max(float(getattr(ct, "nevai_watch_floor_gL", WATCH_FLOOR_GL)), 1e-6)
         self.issued, self.err = {}, {}
         self.flag_hours, self.first_flag_h, self.peak = 0, None, 0.0
         self.starts, self._last = [], -10
@@ -68,7 +74,7 @@ class Watch:
         pred = float(self.issued[i][h - i - 1])
         if pred < 0.05:
             return None
-        self.err[h] = (actual - pred) / pred
+        self.err[h] = (actual - pred) / max(pred, self.floor)
         oldest = h - self.win - self.base
         for k in [k for k in self.err if k <= oldest]:
             del self.err[k]
