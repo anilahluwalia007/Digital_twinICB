@@ -23,7 +23,26 @@ Windows whose 24 h target runs past the end of the N run are no longer used for 
 (the run-out rows have no titre and taught the model a drop to zero). Older saved weights
 are ignored and retrained.
 
-Train:  python3 icb_nevai.py train
+What NevAI is trained on
+  Simulator runs only (no plant data unless you fine-tune): each run is icb_dynamic.py with the
+  parameters sent from the Inputs tab (the selected case is not applied), the titre curve cycled
+  through the four Figure 2 molecules (plus a custom curve if one is set), its height multiplied
+  by a random factor in TRAIN_DEFAULTS scale range (log-uniform), its speed by 0.9-1.1, the
+  perfusion rate by 0.85-1.15, and one random titre step (x0.8-1.1) somewhere in the run.
+  "runs" train the networks; "val_runs" (different molecules, other seeds) set the 10-90 % band.
+  Both networks: LSTM, 48 h look-back, 24 h ahead, 32 hidden units.
+
+Training settings (TRAIN_DEFAULTS, clamped to TRAIN_LIMITS)
+  From the web page: send them with the params as params["nevai_train"] =
+  {"runs", "val_runs", "epochs", "scale_lo", "scale_hi", "seed"}; ICBParams ignores the key.
+  Progress is written to data/icb/training_progress.json and returned by status()["progress"].
+
+Train it yourself (command line, then copy data/icb/*_weights.npz and *_meta.json to the server's
+DATA_DIR/icb, or run it on the server):
+  python3 icb_nevai.py train                                   8 runs x 30 epochs (thorough)
+  python3 icb_nevai.py train --runs 12 --epochs 40 --scale-lo 0.5 --scale-hi 3 --params inputs.json
+  python3 icb_nevai.py finetune plant.csv --epochs 5           adapt to hourly plant data
+  python3 icb_nevai.py status
 """
 from __future__ import annotations
 import json
@@ -42,6 +61,45 @@ ICB_DIR.mkdir(parents=True, exist_ok=True)
 REF_H = 6                 # current titre = median of the last REF_H measurements in the window
 MIN_OBS = 12              # measured titre hours a window needs before NevAI forecasts from it
 SCALE_RANGE = (0.5, 2.0)  # training multiplies each run's titre curve by a factor in this range
+
+TRAIN_DEFAULTS = {"runs": 4, "val_runs": 2, "epochs": 8, "scale_lo": SCALE_RANGE[0],
+                  "scale_hi": SCALE_RANGE[1], "seed": 0}
+TRAIN_LIMITS = {"runs": (2, 24), "val_runs": (0, 8), "epochs": (1, 80), "scale_lo": (0.1, 1.0),
+                "scale_hi": (1.0, 5.0), "seed": (0, 10 ** 6)}
+PROGRESS_PATH = ICB_DIR / "training_progress.json"
+
+
+def train_settings(overrides=None):
+    """Defaults, then any overrides, each clamped to TRAIN_LIMITS (bad values keep the default)."""
+    out = dict(TRAIN_DEFAULTS)
+    for k, v in (overrides or {}).items():
+        if k not in out or v is None or v == "":
+            continue
+        try:
+            lo, hi = TRAIN_LIMITS[k]
+            v = float(v)
+            v = min(max(v, lo), hi)
+            out[k] = int(round(v)) if k in ("runs", "val_runs", "epochs", "seed") else v
+        except (TypeError, ValueError):
+            pass
+    if out["scale_hi"] < out["scale_lo"]:
+        out["scale_lo"], out["scale_hi"] = out["scale_hi"], out["scale_lo"]
+    return out
+
+
+def _progress(state, stage, done, total, t0, **extra):
+    """Write the training progress file (read back by status())."""
+    rec = {"state": state, "stage": stage, "done": int(done), "total": int(total),
+           "pct": round(100.0 * done / total, 1) if total else None,
+           "started": round(t0, 1), "updated": round(time.time(), 1),
+           "elapsed_s": round(time.time() - t0, 1), **extra}
+    try:
+        tmp = PROGRESS_PATH.with_name(PROGRESS_PATH.name + ".tmp")
+        tmp.write_text(json.dumps(rec))
+        os.replace(tmp, PROGRESS_PATH)
+    except OSError:
+        pass
+    return rec
 
 TITRE_KEYS = ["titre_meas", "VVD", "Xv_meas", "viability", "sieve", "S", "n_day", "phase"]
 WW_KEYS = ["ww_total_Lh", "ww_cells_Lh", "ww_capture_flowthrough", "capture_switch",
@@ -126,7 +184,7 @@ class Forecaster:
         """The relative model uses every window a third as far apart: more examples, same runs."""
         return max(1, int(stride) // 3) if self.relative else stride
 
-    def fit(self, histories, epochs=8, stride=12):
+    def fit(self, histories, epochs=8, stride=12, on_epoch=None):
         self.scale = 1.0 if self.relative else (
             max(max(_g(r, self.target_key) for r in h) for h in histories if h) or 1.0)
         X, Y = [], []
@@ -138,7 +196,7 @@ class Forecaster:
             raise ValueError(f"Runs too short: need more than {SEQ_LEN + HORIZON} hourly rows")
         X, Y = np.array(X, dtype=np.float32), np.array(Y, dtype=np.float32) - self.offset
         self.w = nev.NevAIWeights(X.shape[2], HIDDEN, HORIZON)
-        losses = nev.train(self.w, X, Y, epochs=epochs)
+        losses = nev.train_batched(self.w, X, Y, epochs=epochs, on_epoch=on_epoch)
         self.meta = {"trained": True, "feature_version": FEATURE_VERSION, "windows": int(len(X)),
                      "epochs": int(epochs), "relative": self.relative, "offset": self.offset,
                      "final_loss": round(float(losses[-1]), 5) if losses else None,
@@ -153,8 +211,8 @@ class Forecaster:
         X, Y = self._windows(hist, stride)
         if not X:
             return {"fine_tuned": False, "reason": f"need more than {SEQ_LEN + HORIZON} hourly rows"}
-        losses = nev.train(self.w, np.array(X, dtype=np.float32),
-                           np.array(Y, dtype=np.float32) - self.offset, epochs=epochs, lr=nev.LR * 0.3)
+        losses = nev.train_batched(self.w, np.array(X, dtype=np.float32),
+                                   np.array(Y, dtype=np.float32) - self.offset, epochs=epochs, lr=nev.LR * 0.3)
         self.meta["plant_windows"] = self.meta.get("plant_windows", 0) + len(X)
         self.save()
         return {"fine_tuned": True, "windows": len(X), "loss": round(float(losses[-1]), 5)}
@@ -269,16 +327,18 @@ class ICBForecasters:
         return {"titre": self.titre.forecast(hist), "ww": self.ww.forecast(hist)}
 
 
-def synthetic_histories(base_params=None, n_runs=4, seed=0, jitter=0.15, offset=0):
+def synthetic_histories(base_params=None, n_runs=4, seed=0, jitter=0.15, offset=0,
+                        scale_range=SCALE_RANGE, on_run=None):
     """Varied simulator runs. IDB mode cycles through the molecules and varies
-    curve height (×0.5 to ×2, log-uniform, so cases far above the Inputs titre are covered),
+    curve height (scale_range, default ×0.5 to ×2, log-uniform, so cases far above the Inputs
+    titre are covered),
     curve speed and feed rate; the legacy model varies growth, productivity, perfusion and
     fouling. Each run gets one random titre step.
     offset shifts the molecule cycle, so validation runs use different molecules."""
     from icb_process import ICBParams, TITRE_PROFILES
     from icb_dynamic import ICBSimulator
     rng = np.random.default_rng(seed)
-    lo, hi = math.log(SCALE_RANGE[0]), math.log(SCALE_RANGE[1])
+    lo, hi = math.log(scale_range[0]), math.log(scale_range[1])
     hists = []
     for k in range(n_runs):
         p = ICBParams.from_dict(base_params)
@@ -298,21 +358,64 @@ def synthetic_histories(base_params=None, n_runs=4, seed=0, jitter=0.15, offset=
             "type": "qp_step", "day": float(rng.uniform(3, max(4, p.run_days - 2))),
             "factor": float(rng.uniform(0.8, 1.1))}]
         hists.append(ICBSimulator(p, forecaster=None, seed=seed + k).run(keep_history=True)["_history"])
+        if on_run:
+            on_run(k + 1)
     return hists
 
 
-def train_forecasters(base_params=None, n_runs=4, epochs=8, stride=12, seed=0, n_val=2):
-    """Train both forecasters, then calibrate their 10-90 % bands on n_val held-out runs."""
+def train_forecasters(base_params=None, n_runs=None, epochs=None, stride=12, seed=None, n_val=None,
+                      settings=None):
+    """Train both forecasters, then calibrate their 10-90 % bands on held-out runs.
+    Settings: TRAIN_DEFAULTS, then the arguments given here, then base_params["nevai_train"]
+    (what the web page sends). Progress goes to PROGRESS_PATH at every run and epoch."""
     t0 = time.time()
-    hists = synthetic_histories(base_params, n_runs, seed)
-    fs = ICBForecasters()
-    out = {"titre": fs.titre.fit(hists, epochs, stride), "ww": fs.ww.fit(hists, epochs, stride)}
-    if n_val > 0:
-        val = synthetic_histories(base_params, n_val, seed + 1000, offset=n_runs)
-        out["titre_band"] = fs.titre.calibrate(val)
-        out["ww_band"] = fs.ww.calibrate(val)
-    out.update({"runs": n_runs, "seconds": round(time.time() - t0, 1)})
-    return out
+    bp = dict(base_params or {})
+    given = {"runs": n_runs, "epochs": epochs, "seed": seed, "val_runs": n_val, **(settings or {})}
+    cfg = train_settings({**{k: v for k, v in given.items() if v is not None}, **(bp.pop("nevai_train", None) or {})})
+    R, V, E = cfg["runs"], cfg["val_runs"], cfg["epochs"]
+    total = R + V + 2 * E
+    rng_scale = (cfg["scale_lo"], cfg["scale_hi"])
+    done = [0]
+
+    def step(stage, **extra):
+        done[0] += 1
+        _progress("running", stage, done[0], total, t0, settings=cfg, **extra)
+
+    _progress("running", f"Simulating training run 1 of {R}", 0, total, t0, settings=cfg)
+    try:
+        hists = synthetic_histories(bp, R, cfg["seed"], scale_range=rng_scale,
+                                    on_run=lambda k: step(f"Simulated training run {k} of {R}"))
+        fs = ICBForecasters()
+        out = {"titre": fs.titre.fit(hists, E, stride, on_epoch=lambda e, L: step(
+                   f"Titre network: epoch {e} of {E}", loss=round(L, 5))),
+               "ww": fs.ww.fit(hists, E, stride, on_epoch=lambda e, L: step(
+                   f"Wastewater network: epoch {e} of {E}", loss=round(L, 5)))}
+        if V > 0:
+            val = synthetic_histories(bp, V, cfg["seed"] + 1000, offset=R, scale_range=rng_scale,
+                                      on_run=lambda k: step(f"Simulated validation run {k} of {V}"))
+            out["titre_band"] = fs.titre.calibrate(val)
+            out["ww_band"] = fs.ww.calibrate(val)
+        up = (bp.get("upstream") or {})
+        trained_on = {"source": "simulator runs (Inputs tab parameters, no case applied)",
+                      "runs": R, "val_runs": V, "epochs": E, "seed": cfg["seed"],
+                      "titre_scale_range": list(rng_scale), "upstream_mode": up.get("mode", "profile"),
+                      "run_days": bp.get("run_days"), "seconds": round(time.time() - t0, 1)}
+        for f in (fs.titre, fs.ww):
+            f.meta["trained_on"] = trained_on
+            f.save()
+        out.update({"runs": R, "settings": cfg, "seconds": round(time.time() - t0, 1)})
+        _progress("done", "Finished", total, total, t0, settings=cfg)
+        return out
+    except Exception as e:
+        _progress("failed", f"Failed: {e}", done[0], total, t0, settings=cfg, error=str(e))
+        raise
+
+
+def read_progress():
+    try:
+        return json.loads(PROGRESS_PATH.read_text())
+    except (OSError, ValueError):
+        return None
 
 
 def status():
@@ -321,7 +424,9 @@ def status():
         fs.load()
     except Exception:
         pass
-    return {"ready": fs.ready, "titre": fs.titre.meta, "ww": fs.ww.meta}
+    return {"ready": fs.ready, "titre": fs.titre.meta, "ww": fs.ww.meta, "progress": read_progress(),
+            "train_defaults": TRAIN_DEFAULTS, "train_limits": TRAIN_LIMITS,
+            "server_time": round(time.time(), 1)}
 
 
 def weights_report():
@@ -339,16 +444,74 @@ def weights_report():
     return out
 
 
-if __name__ == "__main__":
-    from icb_dynamic import ICBSimulator
-    if len(sys.argv) > 1 and sys.argv[1] == "train":
-        # Full local training: 8 runs (each molecule twice) x 30 epochs.
-        # The web app's background training uses a lighter default (4 x 8).
+def read_plant_csv(path):
+    """Hourly plant data: a header row with any of TITRE_KEYS / WW_KEYS; blank cells = no reading."""
+    import csv
+    rows = []
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        for r in csv.DictReader(f):
+            row = {}
+            for k, v in r.items():
+                if k is None:
+                    continue
+                v = (v or "").strip()
+                try:
+                    row[k.strip()] = float(v) if v else None
+                except ValueError:
+                    row[k.strip()] = v
+            rows.append(row)
+    return rows
+
+
+def _cli():
+    import argparse
+    ap = argparse.ArgumentParser(description="Train, fine-tune or inspect the NevAI forecasters.")
+    sub = ap.add_subparsers(dest="cmd")
+    t = sub.add_parser("train", help="train on simulator runs")
+    t.add_argument("--runs", type=int, default=8)
+    t.add_argument("--val-runs", type=int, default=2)
+    t.add_argument("--epochs", type=int, default=30)
+    t.add_argument("--scale-lo", type=float, default=SCALE_RANGE[0])
+    t.add_argument("--scale-hi", type=float, default=SCALE_RANGE[1])
+    t.add_argument("--seed", type=int, default=0)
+    t.add_argument("--params", help="JSON file of parameters (as the Inputs tab sends them)")
+    f = sub.add_parser("finetune", help="adapt the trained networks to hourly plant data (CSV)")
+    f.add_argument("csv")
+    f.add_argument("--epochs", type=int, default=5)
+    sub.add_parser("status", help="show what the saved networks were trained on")
+    a = ap.parse_args()
+    if a.cmd == "train":
+        base = json.loads(open(a.params, encoding="utf-8").read()) if a.params else None
         print("Training NevAI forecasters (a few minutes)...")
-        print(json.dumps(train_forecasters(n_runs=8, epochs=30), indent=2))
-    fs = ICBForecasters()
-    if fs.load():
-        res = ICBSimulator(forecaster=fs, seed=7).run()
-        print(json.dumps(res["kpi"], indent=2))
+        out = train_forecasters(base, settings={"runs": a.runs, "val_runs": a.val_runs, "epochs": a.epochs,
+                                                "scale_lo": a.scale_lo, "scale_hi": a.scale_hi, "seed": a.seed})
+        print(json.dumps(out, indent=2))
+        print(f"Weights written to {ICB_DIR.resolve()}")
+    elif a.cmd == "finetune":
+        fs = ICBForecasters()
+        if not fs.load():
+            sys.exit("No trained forecasters yet. Run:  python3 icb_nevai.py train")
+        rows = read_plant_csv(a.csv)
+        print(f"{len(rows)} hourly rows from {a.csv}")
+        for name, f_, keys in (("titre", fs.titre, TITRE_KEYS), ("ww", fs.ww, WW_KEYS)):
+            if not rows or f_.target_key not in rows[0]:
+                print(f"  {name}: skipped (no '{f_.target_key}' column)")
+                continue
+            missing = [k for k in keys if k not in rows[0]]
+            print(f"  {name}: {f_.fine_tune(rows, epochs=a.epochs)}"
+                  + (f"  (columns missing, treated as 0: {', '.join(missing)})" if missing else ""))
+        print("The 10-90 % band is unchanged; recalibrate once more plant data is in.")
+    elif a.cmd == "status":
+        print(json.dumps({**status(), "files": weights_report()}, indent=2))
     else:
-        print("No trained forecasters yet. Run:  python3 icb_nevai.py train")
+        from icb_dynamic import ICBSimulator
+        fs = ICBForecasters()
+        if fs.load():
+            res = ICBSimulator(forecaster=fs, seed=7).run()
+            print(json.dumps(res["kpi"], indent=2))
+        else:
+            print("No trained forecasters yet. Run:  python3 icb_nevai.py train")
+
+
+if __name__ == "__main__":
+    _cli()

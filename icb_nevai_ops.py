@@ -143,5 +143,7 @@ def report(p, used, partial_loads, watch, H1, history):
                       "first_flag_n_day": round((w.first_flag_h - H1) / 24.0, 2)
                       if w and w.first_flag_h is not None else None,
                       "peak_score": round(w.peak, 3) if w else None,
-                      "threshold": w.thr if w else None},
+                      "threshold": w.thr if w else None,
+                      "lead_h": w.lead if w else None, "window_h": w.win if w else None,
+                      "baseline_h": w.base if w else None, "floor_gL": w.floor if w else None},
             "detection": det, "prep": prep_compare(history, p.control)}

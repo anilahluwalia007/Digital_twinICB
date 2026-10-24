@@ -6,6 +6,7 @@ No TensorFlow / PyTorch dependency; runs on Render free tier.
 
 Compatible with Python 3.9+ (macOS system Python). Same API as the original:
 NevAIWeights, nevai_forward, nevai_backward, train, predict, anomaly_score,
+train_batched (same LSTM, a whole mini-batch per matrix product: much faster),
 multi_train_correlation, ingest_scada, run_synthetic_training, run_prediction.
 """
 from __future__ import annotations
@@ -242,6 +243,82 @@ def train(w, X, y, epochs=EPOCHS, batch_sz=BATCH_SZ, lr=LR, verbose=False):
         losses.append(float(ep_loss))
         if verbose and ep % 10 == 0:
             print(f"Epoch {ep:3d}  loss={ep_loss:.4f}")
+    return losses
+
+
+# ────────────────────────────────────────────────────────────────────
+# 5b. Batched training (same LSTM, whole mini-batch per matrix product)
+# ────────────────────────────────────────────────────────────────────
+# train() above runs one sequence at a time in Python, which is slow on a small server.
+# train_batched() gives the same gradients (mean over the batch) with one matrix product per
+# time step for the whole batch; the gradient is clipped once per batch instead of per sequence.
+def forward_batch(w, X):
+    """X: (B, T, input_dim). Returns preds (B, horizon) and the cache for backward_batch."""
+    B, T, _ = X.shape
+    h = w.hidden_dim
+    ht = np.zeros((B, h))
+    ct = np.zeros((B, h))
+    cache = []
+    for t in range(T):
+        z = X[:, t] @ w.Wx.T + ht @ w.Wh.T + w.b
+        i_g, f_g, o_g = sigmoid(z[:, :h]), sigmoid(z[:, h:2 * h]), sigmoid(z[:, 2 * h:3 * h])
+        g_ = tanh_(z[:, 3 * h:])
+        ct_ = f_g * ct + i_g * g_
+        tc = tanh_(ct_)
+        ht_ = o_g * tc
+        cache.append((X[:, t], ht, ct, i_g, f_g, o_g, g_, tc))
+        ht, ct = ht_, ct_
+    return ht @ w.Wo.T + w.bo, ht, cache
+
+
+def backward_batch(w, Y, preds, hT, cache, clip=None):
+    """Gradients of the batch-mean loss 0.5·Σ(pred − y)², clipped to CLIP_NORM."""
+    B = Y.shape[0]
+    h = w.hidden_dim
+    d_pred = (preds - Y) / B
+    loss = 0.5 * float(np.sum((preds - Y) ** 2)) / B
+    grads = dict(Wx=np.zeros_like(w.Wx), Wh=np.zeros_like(w.Wh), b=np.zeros_like(w.b),
+                 Wo=d_pred.T @ hT, bo=d_pred.sum(axis=0))
+    dht = d_pred @ w.Wo
+    dct = np.zeros((B, h))
+    for x, ht_prev, ct_prev, i_g, f_g, o_g, g_, tc in reversed(cache):
+        d_ot = dht * tc
+        d_ct = dht * o_g * dtanh(tc) + dct
+        dz = np.concatenate([d_ct * g_ * dsig(i_g), d_ct * ct_prev * dsig(f_g),
+                             d_ot * dsig(o_g), d_ct * i_g * dtanh(g_)], axis=1)
+        grads["Wx"] += dz.T @ x
+        grads["Wh"] += dz.T @ ht_prev
+        grads["b"] += dz.sum(axis=0)
+        dht = dz @ w.Wh
+        dct = d_ct * f_g
+    clip = CLIP_NORM if clip is None else clip
+    total = math.sqrt(sum(float(np.sum(g ** 2)) for g in grads.values()))
+    if total > clip:
+        grads = {k: v * (clip / (total + 1e-8)) for k, v in grads.items()}
+    return loss, grads
+
+
+def train_batched(w, X, y, epochs=EPOCHS, batch_sz=BATCH_SZ, lr=LR, on_epoch=None):
+    """Mini-batch Adam training; on_epoch(epoch, loss) is called after every epoch.
+    Returns the mean per-sequence loss of each epoch (same scale as train())."""
+    if len(X) == 0:
+        return []
+    X, y = np.asarray(X, dtype=float), np.asarray(y, dtype=float)
+    w.init_adam()
+    n = len(X)
+    losses = []
+    for ep in range(epochs):
+        idx = np.random.permutation(n)
+        ep_loss = 0.0
+        for s in range(0, n, batch_sz):
+            bi = idx[s:s + batch_sz]
+            preds, hT, cache = forward_batch(w, X[bi])
+            loss, grads = backward_batch(w, y[bi], preds, hT, cache)
+            w.adam_step(grads, lr=lr)
+            ep_loss += loss * len(bi)
+        losses.append(ep_loss / n)
+        if on_epoch:
+            on_epoch(ep + 1, losses[-1])
     return losses
 
 
