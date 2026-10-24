@@ -276,7 +276,44 @@ tr.up td{background:#fef3c7}
 .evmore li{display:flex;gap:12px;font-size:11.5px;color:#dbeafe;padding:3px 0;border-top:1px solid rgba(255,255,255,.1)}
 .evmore li span{min-width:72px;color:#93c5fd}
 .evempty{color:#bfdbfe;padding:10px 0}
-@media (max-width:900px){.gstats,.gcompare{grid-template-columns:repeat(2,minmax(0,1fr))}}
+/* watch explanation and training panel */
+.gexplain{margin-top:12px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.2);border-radius:12px;padding:10px 14px}
+.gexplain summary{cursor:pointer;color:#fff;font-weight:600;font-size:12.5px;display:flex;align-items:center;gap:8px;list-style:none}
+.gexplain summary::-webkit-details-marker{display:none}
+.gexplain summary::after{content:'▾';margin-left:auto;color:#93c5fd}
+.gexplain[open] summary::after{content:'▴'}
+.gexplain p,.gexplain li{color:#dbeafe;font-size:12px;line-height:1.55;margin:6px 0}
+.gexplain ul{margin:6px 0;padding-left:18px}
+.gexplain b,.gexplain code{color:#fff}
+.gexplain code,.gcode{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;background:rgba(5,25,60,.35);border-radius:6px;padding:1px 6px}
+.gcode{display:block;white-space:pre-wrap;padding:8px 10px;margin:6px 0;color:#e6f0ff}
+.gcols{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:16px}
+.gform{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.gform label{display:flex;flex-direction:column;gap:4px;font-size:11px;font-weight:600;color:#bfdbfe}
+.gform label span{font-weight:500;color:#93c5fd}
+.glass-wrap input[type=number]{width:100%;background:rgba(255,255,255,.12);color:#fff;border:1px solid rgba(255,255,255,.35);
+  border-radius:8px;padding:6px 8px;font-size:13px}
+.glass-wrap input[type=number]:focus{outline:2px solid #93c5fd;outline-offset:1px}
+.glass-wrap button.gprimary{background:#fff;color:#16498c;border:0}
+.glass-wrap button.gprimary:hover{background:#dbeafe}
+.gest{font-size:11.5px;color:#bfdbfe;margin-top:8px}
+.gprog{margin-top:12px}
+.gprog .bar{height:8px;border-radius:999px;background:rgba(255,255,255,.18);overflow:hidden}
+.gprog .bar i{display:block;height:100%;background:linear-gradient(90deg,#7dd3fc,#a7f3d0);border-radius:999px;transition:width .4s}
+.gprog .meta{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:11.5px;color:#dbeafe;margin-top:6px}
+.gprog .meta b{color:#fff}
+.gwarn{margin-top:10px;background:rgba(251,191,36,.18);border:1px solid rgba(253,224,71,.6);color:#fef3c7}
+.gwarn b{color:#fde68a}
+.gerr{margin-top:10px;background:rgba(248,113,113,.2);border:1px solid rgba(252,165,165,.7);color:#fee2e2}
+.gerr b{color:#fecaca}
+.gkv{width:100%;margin-top:0}
+.gkv td{padding:5px 4px;font-size:12px}
+.gkv td:first-child{color:#bfdbfe;width:44%}
+.gkv td:last-child{color:#fff}
+.gpill.warn{background:rgba(251,191,36,.25);border-color:rgba(253,224,71,.85);color:#fde68a}
+.gpill.bad{background:rgba(248,113,113,.28);border-color:rgba(252,165,165,.9);color:#fecaca}
+#aiState.link{cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px}
+@media (max-width:900px){.gstats,.gcompare{grid-template-columns:repeat(2,minmax(0,1fr))}.gcols{grid-template-columns:1fr}.gform{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:700px){
   .evitem{grid-template-columns:78px 30px minmax(0,1fr);gap:8px}
   .evdot{width:30px;height:30px}.evdot svg{width:15px;height:15px}
@@ -550,7 +587,7 @@ tr.up td{background:#fef3c7}
     <!-- Sheet 6 -->
     <div class="sheet" id="sheet-nevai">
       <div class="sheethead"><h2><span>6</span>NevAI and events</h2>
-        <p>NevAI actions, watch flags, buffer preparation, and the run's event and alarm log.</p></div>
+        <p>NevAI actions, watch flags, buffer preparation, how NevAI is trained, and the run's event and alarm log.</p></div>
       <div class="glass-wrap">
         <div class="glass gpanel" id="nevaiCard">
           <div class="ghead">
@@ -563,6 +600,53 @@ tr.up td{background:#fef3c7}
             <span id="benefitInfo" class="muted">Runs the selected case twice with the same seed.</span>
           </div>
           <div id="benefitOut"></div>
+        </div>
+        <div class="glass gpanel" id="trainCard">
+          <div class="ghead">
+            <div><div class="geyebrow">NevAI model</div><h3>Training: what NevAI learns from, and your settings</h3></div>
+            <span id="trainPill" class="gpill">—</span>
+          </div>
+          <div id="trainProgress"></div>
+          <div class="gcols" style="margin-top:12px">
+            <div>
+              <h4 class="gh4" style="margin-top:0">What it is trained on</h4>
+              <div class="gexplain" style="margin-top:0"><ul style="margin:0">
+                <li><b>Simulator runs, not plant data.</b> Each run is this digital twin with the parameters on the Inputs tab.
+                  The selected case is not applied; NevAI forecasts the titre as a ratio of the current titre, so it follows any case height.</li>
+                <li><b>Varied on purpose.</b> The titre curve cycles through the four Figure 2 molecules; its height is multiplied by a random
+                  factor between <b id="trRangeTxt">×0.5 and ×2</b>, its speed by 0.9–1.1 and the perfusion rate by 0.85–1.15,
+                  and each run gets one random titre step (×0.8–1.1).</li>
+                <li><b>Training runs</b> teach the networks; <b>validation runs</b> (other molecules and seeds) are held back to set the 10–90 % forecast band.</li>
+                <li><b>Two networks</b> (LSTM): permeate titre and total wastewater. Each looks back 48 h and forecasts 24 h ahead, every 6 h of the N run.
+                  An <b>epoch</b> is one pass of the network over all training examples.</li>
+              </ul></div>
+              <h4 class="gh4">Current model</h4>
+              <table class="gkv" id="trainModel"></table>
+            </div>
+            <div>
+              <h4 class="gh4" style="margin-top:0">Train with your settings</h4>
+              <div class="gform" id="trainForm"></div>
+              <div class="gest" id="trainEst"></div>
+              <div class="gactions no-print">
+                <button id="trainBtn2" type="button" class="gprimary">Train NevAI with these settings</button>
+                <button id="trainReset" type="button" class="ghost">Defaults</button>
+              </div>
+              <details class="gexplain">
+                <summary>Train it yourself, or on your own plant data</summary>
+                <p>Run the same training on any computer with the project files, then copy
+                  <code>data/icb/titre_*</code> and <code>data/icb/ww_*</code> (weights and meta) into the server's <code>DATA_DIR/icb</code>:</p>
+                <code class="gcode">python3 icb_nevai.py train --runs 12 --epochs 30 --scale-lo 0.5 --scale-hi 3 --params inputs.json
+python3 icb_nevai.py status</code>
+                <p><code>inputs.json</code> is optional: the parameters as this page sends them (without it, the defaults are used).</p>
+                <p>To adapt a trained model to your plant, export hourly data as CSV with a header row and fine-tune:</p>
+                <code class="gcode">python3 icb_nevai.py finetune plant.csv --epochs 5</code>
+                <p>Titre columns: <code>titre_meas</code> (g/L, blank where not measured), <code>VVD</code>, <code>Xv_meas</code>, <code>viability</code>,
+                  <code>sieve</code>, <code>S</code>, <code>n_day</code>, <code>phase</code> (1 in the N run).
+                  Wastewater columns: <code>ww_total_Lh</code>, <code>ww_cells_Lh</code>, <code>ww_capture_flowthrough</code>, <code>capture_switch</code>,
+                  <code>ww_n1_permeate</code>, <code>ww_sptff_permeate</code>. Missing columns count as 0; fine-tuning keeps the old forecast band.</p>
+              </details>
+            </div>
+          </div>
         </div>
         <div class="glass gpanel" id="eventsCard">
           <div class="ghead">
@@ -1602,7 +1686,31 @@ function renderNevai(j) {
           `<div class="d ${cls}">${cls === 'eq' ? 'no change' : (dl > 0 ? '+' : '−') + fx(Math.abs(dl), d) + ' ' + u}</div></div>`;
       }).join('') + `</div><div class="gnote">Same preparation capacity for both: ${fx(pr.prep_capacity_Lh, 1)} L/h. Lower is better for every figure.</div>`;
   }
+  h += watchNote(w);
   $('nevaiOut').innerHTML = h;
+}
+
+// how the watch score works, with this run's settings
+function watchNote(w) {
+  const ctl = (LAST && LAST.params && LAST.params.control) || {}, pat = (LAST && LAST.params && LAST.params.pat) || {};
+  const lead = w.lead_h != null ? w.lead_h : nz(ctl.nevai_watch_lead_h) || 6;
+  const win = w.window_h != null ? w.window_h : nz(ctl.nevai_watch_window_h) || 6;
+  const base = w.baseline_h != null ? w.baseline_h : nz(ctl.nevai_watch_baseline_h) || 48;
+  const floor = w.floor_gL != null ? w.floor_gL : 1;
+  const thr = w.threshold != null ? w.threshold : (ctl.nevai_watch_threshold != null ? ctl.nevai_watch_threshold : 0.12);
+  const noise = pat.titre_noise != null ? fx(100 * pat.titre_noise, 0) + ' %' : 'about 5 %';
+  return `<details class="gexplain"><summary>${icon('info')}What the watch score means, and why the threshold is ${fx(thr, 2)}</summary>` +
+    `<p>Every hour NevAI compares the measured permeate titre with the forecast it made <b>${fx(lead, 0)} h</b> earlier. ` +
+    `The <b>watch score</b> is how far the average error over the last <b>${fx(win, 0)} h</b> has moved from its usual level ` +
+    `over the <b>${fx(base, 0)} h</b> before. A steady bias does not count: the watch looks for a <i>change</i>, ` +
+    `such as a PAT sensor drifting, productivity dropping or the TFF fouling, often before the lab sees it.</p>` +
+    `<p>The error is taken as a share of the forecast, but never of less than <b>${fx(floor, 1)} g/L</b>, so small wobbles ` +
+    `at start-up titres of a few tenths of a g/L do not count.</p>` +
+    `<p><b>Threshold ${fx(thr, 2)}</b> (<code>control.nevai_watch_threshold</code>, Inputs tab) means a shift of more than ` +
+    `${fx(100 * thr, 0)} % is flagged. It sits above ordinary noise: the titre measurement has ${noise} noise and the culture ` +
+    `varies naturally, and in test runs without a fault the score stays mostly below 0.10; a 15 % productivity drop takes ` +
+    `it to about 0.2 within 4–5 h. Lower it to catch smaller shifts (more false flags); raise it for fewer flags. ` +
+    `The watch only reports; it never changes the plant.</p></details>`;
 }
 
 async function benefit() {
@@ -1628,10 +1736,12 @@ async function run() {
   if (window.SeqFilm) SeqFilm.stop();
   const runFor = ACTIVE;
   setStatus('Running ' + caseLabel(runFor) + '…');
+  const tRun = performance.now();
   try {
     const params = gather();
     const j = await api('/api/icb/simulate', {params, seed: +$('seed').value || 0, downsample_h: 1,
                                               use_forecaster: $('useFc').checked, case: caseReq(runFor)});
+    LAST_RUN_S = (performance.now() - tRun) / 1000;
     j.caseId = caseReq(runFor) ? runFor : 'none';
     j.seed = +$('seed').value || 0;
     LAST = j;
@@ -1722,15 +1832,104 @@ function applyEnvelope() {
 }
 
 // ── NevAI ──────────────────────────────────────────────────────────
-let pollT = null, wasTraining = false;
+let pollT = null, wasTraining = false, AISTATUS = null, LAST_RUN_S = null;
+const TRAIN_DEF = {runs: 4, val_runs: 2, epochs: 8, scale_lo: 0.5, scale_hi: 2, seed: 0};
+const TRAIN_FIELDS = [['runs', 'Training runs', '2–24', 1], ['val_runs', 'Validation runs', '0–8', 1],
+  ['epochs', 'Epochs', '1–80', 1], ['scale_lo', 'Titre height from', '×0.1–1', 0.1],
+  ['scale_hi', 'Titre height to', '×1–5', 0.1], ['seed', 'Random seed', 'same seed = same runs', 1]];
+const fmtDur = sec => {
+  if (sec === null || sec === undefined || !isFinite(sec)) return '—';
+  sec = Math.max(0, Math.round(sec));
+  if (sec < 60) return sec + ' s';
+  if (sec < 3600) return Math.floor(sec / 60) + ' min' + (sec % 60 ? ' ' + (sec % 60) + ' s' : '');
+  return Math.floor(sec / 3600) + ' h ' + Math.round(sec % 3600 / 60) + ' min';
+};
+function buildTrainForm(def) {
+  $('trainForm').innerHTML = TRAIN_FIELDS.map(([k, l, hint, st]) =>
+    `<label>${l}<input type="number" id="tr_${k}" step="${st}" value="${def[k]}"><span>${hint}</span></label>`).join('');
+  TRAIN_FIELDS.forEach(([k]) => $('tr_' + k).addEventListener('input', trainEstimate));
+  trainEstimate();
+}
+function trainSettings() {
+  const o = {};
+  TRAIN_FIELDS.forEach(([k]) => { const v = parseFloat($('tr_' + k).value); if (!isNaN(v)) o[k] = v; });
+  return o;
+}
+function trainEstimate() {
+  const t = trainSettings(), n = nz(t.runs) + nz(t.val_runs);
+  const lo = t.scale_lo || TRAIN_DEF.scale_lo, hi = t.scale_hi || TRAIN_DEF.scale_hi;
+  $('trRangeTxt').textContent = `×${fx(Math.min(lo, hi), 2)} and ×${fx(Math.max(lo, hi), 2)}`;
+  $('trainEst').innerHTML = LAST_RUN_S
+    ? `Estimated time: about <b>${fmtDur(n * LAST_RUN_S)}</b>, mostly ${n} full simulations at ~${fmtDur(LAST_RUN_S)} each ` +
+      `(your last run), plus a few seconds of network training. More runs and epochs give a better model but take longer.`
+    : `${n} full simulations, each about as long as "Run selected case", plus a few seconds of network training. ` +
+      `More runs and epochs give a better model but take longer.`;
+}
+function renderTrainPanel(s) {
+  if (!$('trainCard')) return;
+  if (!$('tr_runs')) buildTrainForm(Object.assign({}, TRAIN_DEF, (s && s.train_defaults) || {}));
+  s = s || {};
+  const t = s.training || {}, pr = s.progress, m = s.titre || {}, mw = s.ww || {}, on = m.trained_on;
+  const now = s.server_time || Date.now() / 1000;
+  const running = !!t.running;
+  const pill = $('trainPill');
+  const prRun = pr && pr.state === 'running';
+  if (running || prRun) { pill.textContent = 'Training' + (pr && pr.pct != null ? ' ' + fx(pr.pct, 0) + ' %' : ''); pill.className = 'gpill adv'; }
+  else if (s.ready) { pill.textContent = 'Ready'; pill.className = 'gpill act'; }
+  else if (t.error || (pr && pr.state === 'failed')) { pill.textContent = 'Failed'; pill.className = 'gpill bad'; }
+  else { pill.textContent = 'Not trained'; pill.className = 'gpill warn'; }
+  // progress
+  let h = '';
+  if (running || prRun) {
+    if (pr && prRun) {
+      const el = now - pr.started, age = now - pr.updated, pct = nz(pr.pct);
+      const left = pct > 3 && age <= 300 ? el * (100 - pct) / pct : null;
+      h += `<div class="gprog"><div class="bar"><i style="width:${Math.max(2, pct)}%"></i></div>` +
+        `<div class="meta"><span><b>${esc(pr.stage)}</b> · step ${fx(pr.done, 0)} of ${fx(pr.total, 0)}</span>` +
+        `<span>running ${fmtDur(el)}${left !== null ? ' · about ' + fmtDur(left) + ' left' : ''}</span></div></div>`;
+      if (age > 300) h += `<div class="gcallout gwarn">${icon('alarm')}<div><b>No progress for ${fmtDur(age)}</b>` +
+        `A single simulation should not take this long, so the training has probably stopped, for example because the server restarted ` +
+        `or ran out of memory. Press Train again; if the server says it is already running, restart the server.</div></div>`;
+    } else if (running && pr && pr.state !== 'running') {
+      h += `<div class="gcallout gwarn">${icon('alarm')}<div><b>The server still says "training", but training ${pr.state === 'done' ? 'finished' : 'failed'} ` +
+        `${fmtDur(now - pr.updated)} ago</b>${pr.error ? esc(pr.error) + '. ' : ''}The server's training flag was not cleared. ` +
+        `Restart the server, or check that its training route clears the flag when train_forecasters returns or raises.</div></div>`;
+    } else {
+      h += `<div class="gprog"><div class="bar"><i style="width:2%"></i></div><div class="meta"><span><b>Training…</b> ` +
+        `no progress details from the server</span><span>update icb_nevai.py on the server to see each run and epoch here</span></div></div>`;
+    }
+  } else if (pr && pr.state === 'failed') {
+    h += `<div class="gcallout gerr">${icon('alarm')}<div><b>Last training failed</b>${esc(pr.error || pr.stage)}</div></div>`;
+  } else if (t.error) {
+    h += `<div class="gcallout gerr">${icon('alarm')}<div><b>Last training failed</b>${esc(t.error)}</div></div>`;
+  }
+  $('trainProgress').innerHTML = h;
+  // current model
+  const when = m.last_trained ? new Date(m.last_trained).toLocaleString() : null;
+  const rows = [
+    ['Status', s.ready ? 'Ready: forecasts are used in runs' : 'Not available' + (s.why_off ? ': ' + esc(s.why_off) : '')],
+    ['Last trained', when ? esc(when) : '—'],
+    ['Trained on', on ? `${fx(on.runs, 0)} simulator runs + ${fx(on.val_runs, 0)} validation runs, ${fx(on.epochs, 0)} epochs`
+      : m.epochs ? `${fx(m.epochs, 0)} epochs (run count not recorded: trained before this update)` : '—'],
+    ['Titre height range', on && on.titre_scale_range ? `×${fx(on.titre_scale_range[0], 2)} – ×${fx(on.titre_scale_range[1], 2)}` : '—'],
+    ['Training examples', m.windows ? `titre ${fx(m.windows, 0)} · wastewater ${fx(mw.windows, 0)} (48 h → 24 h windows)` : '—'],
+    ['Final training loss', m.final_loss != null ? `titre ${fx(m.final_loss, 4)} · wastewater ${fx(mw.final_loss, 4)}` : '—'],
+    ['Forecast band', !m.trained ? '—' : m.band_windows ? `10–90 %, from ${fx(m.band_windows, 0)} held-out windows` : 'not calibrated (no validation runs)'],
+    ['Model version', m.feature_version != null ? fx(m.feature_version, 0) + (m.relative ? ' · titre as a ratio of the current titre' : '') : '—'],
+    ['Training time', on && on.seconds != null ? fmtDur(on.seconds) : '—']];
+  $('trainModel').innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+}
 async function refreshAI() {
   try {
     const s = await api('/api/icb/nevai/status');
-    const t = s.training || {};
-    $('aiState').textContent = t.running ? 'NevAI: training… (this page re-runs with forecasts when it finishes)'
+    AISTATUS = s;
+    const t = s.training || {}, pr = s.progress;
+    const stage = pr && pr.state === 'running' ? ` ${pr.stage} (${fx(pr.pct, 0)} %)` : '';
+    $('aiState').textContent = t.running ? 'NevAI: training…' + stage + ' — the page re-runs with forecasts when it finishes'
       : s.ready ? 'NevAI: ready (trained ' + (s.titre.last_trained || '') + ')'
       : t.error ? 'NevAI: training failed – ' + t.error
       : 'NevAI: not available – ' + (s.why_off || 'not trained');
+    renderTrainPanel(s);
     clearTimeout(pollT);
     if (t.running) { wasTraining = true; pollT = setTimeout(refreshAI, 5000); return; }
     if (wasTraining) {
@@ -1745,11 +1944,17 @@ async function refreshAI() {
 async function trainAI() {
   try {
     let params;
-    try { params = gather(); } catch (e) { params = undefined; }
-    const r = await api('/api/icb/nevai/train', params ? {params} : {});
-    setStatus(r.started ? 'NevAI training started' : 'NevAI training already running');
+    try { params = gather(); } catch (e) { params = {}; }
+    params.nevai_train = trainSettings();              // read by icb_nevai.train_forecasters; ignored by the simulator
+    const r = await api('/api/icb/nevai/train', {params});
+    setStatus(r.started ? 'NevAI training started: progress on Outputs → 6 NevAI and events'
+                        : 'NevAI training already running');
   } catch (e) { setStatus(e.message, true); }
   refreshAI();
+}
+function showTraining() {
+  showTab('outputs'); showSheet('nevai');
+  requestAnimationFrame(() => $('trainCard').scrollIntoView({behavior: 'smooth', block: 'start'}));
 }
 
 // ── print ──────────────────────────────────────────────────────────
@@ -1833,6 +2038,12 @@ async function init() {
   $('paramForm').addEventListener('change', syncDesignSelects);
   $('runBtn').onclick = run;
   $('trainBtn').onclick = trainAI;
+  $('trainBtn2').onclick = trainAI;
+  $('trainReset').onclick = () => buildTrainForm(Object.assign({}, TRAIN_DEF, (AISTATUS && AISTATUS.train_defaults) || {}));
+  $('aiState').classList.add('link');
+  $('aiState').title = 'Show NevAI training details';
+  $('aiState').onclick = showTraining;
+  renderTrainPanel(null);
   $('printBtn').onclick = printReport;
   $('sizeAllBtn').onclick = sizeAll;
   $('applySizeBtn').onclick = applySizing;
