@@ -126,6 +126,67 @@ tr.up td{background:#fef3c7}
   #printParams{break-before:page}
 }
 </style>
+<style>
+/* ── Outputs: workbook sheets ─────────────────────────────────────── */
+.sheetbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0 4px}
+.sheetbar .sheets{display:flex;gap:4px;flex-wrap:wrap;flex:1}
+.sheetbar .sheets button{background:#fff;color:var(--t2);border:1px solid var(--bd);border-radius:999px;padding:6px 14px}
+.sheetbar .sheets button b{display:inline-block;min-width:18px;height:18px;line-height:18px;border-radius:50%;
+  background:var(--bg);color:var(--t2);font-size:11px;text-align:center;margin-right:6px}
+.sheetbar .sheets button.on{background:var(--ac);border-color:var(--ac);color:#fff}
+.sheetbar .sheets button.on b{background:#fff;color:var(--ac)}
+.sheetbar .pager{display:flex;gap:6px;align-items:center}
+.sheetbar .pager button{padding:6px 10px}
+.sheetbar .pager button:disabled{cursor:default}
+.sheet{display:none}
+.sheet.on,.printall .sheet{display:block}
+.sheethead{display:flex;justify-content:space-between;align-items:baseline;gap:12px;
+  border-bottom:2px solid var(--ac);padding:4px 0 6px;margin:6px 0 10px}
+.sheethead h2{font-size:16px;margin:0}
+.sheethead h2 span{color:var(--ac);margin-right:8px}
+.sheethead p{margin:0;color:var(--t2);font-size:12px;text-align:right;max-width:60%}
+.sgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:10px 0}
+.sgrid.two{grid-template-columns:repeat(2,minmax(0,1fr))}
+.sgrid > .card{margin:0}
+.span-all{grid-column:1/-1}
+.sheet .chart{height:auto;aspect-ratio:3/2;min-height:200px}
+.sheet .chart.wide{aspect-ratio:7/2}
+/* headline figures and grouped key figures */
+.hero{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-bottom:10px}
+.hero .kpi{border-top:3px solid var(--ac)}
+.hero .kpi .v{font-size:22px}
+.hero .kpi .u{font-size:12px;font-weight:600;color:var(--t2);margin-left:4px}
+.kgroups{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:10px}
+.kgroups > .card{margin:0}
+.kgroups td{padding:3px 4px}
+.kgroups td.num{font-weight:600;color:var(--t1)}
+@media (max-width:1100px){
+  .sgrid,.kgroups{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .hero{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+@media (max-width:700px){
+  .sgrid,.sgrid.two,.kgroups{grid-template-columns:1fr}
+  .hero{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .sheethead{flex-direction:column}.sheethead p{text-align:left;max-width:none}
+}
+@media print{
+  .sheetbar{display:none!important}
+  .sheet{display:block!important;break-before:page}
+  .sheethead{margin:0 0 6px;padding:0 0 4px}
+  .sheethead h2{font-size:14px}
+  .sheet .sgrid{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:6px 0}
+  .sheet .sgrid.two{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .sheet .chart{aspect-ratio:auto;min-height:0;height:58mm}
+  .sheet .chart.wide{height:70mm}
+  .sheet .card h3{font-size:11px;margin-bottom:4px}
+  .hero{grid-template-columns:repeat(6,1fr);gap:6px}
+  .hero .kpi .v{font-size:16px}
+  .kgroups{grid-template-columns:repeat(3,1fr);gap:6px}
+  #bioRes .kpis{grid-template-columns:repeat(7,1fr);gap:4px}
+  #bioRes .kpi{padding:4px 6px}
+  #bioRes .kpi .v{font-size:12px}
+}
+</style>
 </head>
 <body>
 <header>
@@ -298,52 +359,104 @@ tr.up td{background:#fef3c7}
       <div id="pfNotes"></div><div class="scroll"><table id="portfolio"></table></div></div>
   </section>
 
-  <!-- ═══════════════ OUTPUTS ═══════════════ -->
+  <!-- ═══════════════ OUTPUTS (six sheets) ═══════════════ -->
   <section class="panel" id="tab-outputs">
-    <div class="card" id="caseOut"></div>
-    <div id="kpis" class="kpis"></div>
-    <div class="card" id="nevaiCard"><h3>NevAI in operation: actions, watch and buffer preparation</h3>
-      <div id="nevaiOut" class="small"></div>
-      <div class="pfdbar no-print" style="margin-top:8px">
-        <button id="benefitBtn" type="button" class="ghost">Measure NevAI benefit (advisory vs acting)</button>
-        <span id="benefitInfo" class="muted">Runs the selected case twice with the same seed.</span>
+    <div class="sheetbar no-print" id="sheetBar">
+      <div class="sheets">
+        <button type="button" data-sheet="summary"><b>1</b>Summary</button>
+        <button type="button" data-sheet="biology"><b>2</b>Biology &amp; seed train</button>
+        <button type="button" data-sheet="process"><b>3</b>Harvest &amp; capture</button>
+        <button type="button" data-sheet="solutions"><b>4</b>Solutions &amp; wastewater</button>
+        <button type="button" data-sheet="materials"><b>5</b>Materials, vessels &amp; lots</button>
+        <button type="button" data-sheet="nevai"><b>6</b>NevAI &amp; events</button>
       </div>
-      <div id="benefitOut"></div>
+      <div class="pager">
+        <button type="button" class="ghost" id="sheetPrev" title="Previous sheet (←)">◀</button>
+        <span id="sheetPos" class="muted small">1 / 6</span>
+        <button type="button" class="ghost" id="sheetNext" title="Next sheet (→)">▶</button>
+      </div>
     </div>
-    <div class="card"><h3>Biology model (Bio_sim): key results</h3><div id="bioRes"></div></div>
-    <div class="grid">
-      <div class="card"><h3>Biology: titre and cell density</h3><div class="chart"><canvas id="cBioTitre"></canvas></div></div>
-      <div class="card"><h3>Biology: viability, growth and death rates</h3><div class="chart"><canvas id="cBioRates"></canvas></div></div>
-      <div class="card"><h3>Biology: nutrients, waste and osmolality</h3><div class="chart"><canvas id="cBioMetab"></canvas></div></div>
-      <div class="card"><h3>Biology: specific productivity and IVCD</h3><div class="chart"><canvas id="cBioQp"></canvas></div></div>
-      <div class="card"><h3>Seed stages (Seed_sim): growth curves and transfer points</h3><div class="chart"><canvas id="cSeedX"></canvas></div></div>
-      <div class="card"><h3>Seed stages: net growth and the late-exponential threshold</h3><div class="chart"><canvas id="cSeedMu"></canvas></div></div>
+
+    <!-- Sheet 1 -->
+    <div class="sheet" id="sheet-summary">
+      <div class="sheethead"><h2><span>1</span>Summary</h2>
+        <p>Headline results of the last run, key figures by area, and the checks against the selected case.</p></div>
+      <div id="kpiHero" class="hero"></div>
+      <div id="kpis" class="kgroups"></div>
+      <div class="card" id="caseOut"></div>
     </div>
-    <div class="grid">
-      <div class="card"><h3>Permeate titre and NevAI 24 h forecast</h3><div class="chart"><canvas id="cTitre"></canvas></div></div>
-      <div class="card"><h3>Product harvested and Protein A cycles per day</h3><div class="chart"><canvas id="cGrams"></canvas></div></div>
-      <div class="card"><h3>Solutions per day by unit (incl. WFI)</h3><div class="chart"><canvas id="cBuffer"></canvas></div></div>
-      <div class="card"><h3>Solutions next 24 h: NevAI forecast vs actual</h3><div class="chart"><canvas id="cBufFc"></canvas></div></div>
-      <div class="card"><h3>Harvest surge tank</h3><div class="chart"><canvas id="cSump"></canvas></div></div>
-      <div class="card"><h3>Cells: N-1 seed and N reactor</h3><div class="chart"><canvas id="cCells"></canvas></div></div>
-      <div class="card"><h3>Viral inactivation and Protein A vessel</h3><div class="chart"><canvas id="cVi"></canvas></div></div>
-      <div class="card"><h3>Downstream vessels (batching between units)</h3><div class="chart"><canvas id="cVes"></canvas></div></div>
-      <div class="card"><h3>Wastewater flow and NevAI forecast</h3><div class="chart"><canvas id="cWw"></canvas></div></div>
+
+    <!-- Sheet 2 -->
+    <div class="sheet" id="sheet-biology">
+      <div class="sheethead"><h2><span>2</span>Biology and seed train</h2>
+        <p>Production culture (Bio_sim) and seed stages N-3 → N-1 (Seed_sim).</p></div>
+      <div class="card"><h3>Biology model (Bio_sim): key results</h3><div id="bioRes"></div></div>
+      <div class="sgrid">
+        <div class="card"><h3>Titre and cell density</h3><div class="chart"><canvas id="cBioTitre"></canvas></div></div>
+        <div class="card"><h3>Viability, growth and death rates</h3><div class="chart"><canvas id="cBioRates"></canvas></div></div>
+        <div class="card"><h3>Nutrients, waste and osmolality</h3><div class="chart"><canvas id="cBioMetab"></canvas></div></div>
+        <div class="card"><h3>Specific productivity and IVCD</h3><div class="chart"><canvas id="cBioQp"></canvas></div></div>
+        <div class="card"><h3>Seed stages: growth curves and transfer points</h3><div class="chart"><canvas id="cSeedX"></canvas></div></div>
+        <div class="card"><h3>Seed stages: net growth and threshold</h3><div class="chart"><canvas id="cSeedMu"></canvas></div></div>
+      </div>
     </div>
-    <div class="card"><h3>Daily wastewater by stream</h3><div class="chart" style="height:320px"><canvas id="cDaily"></canvas></div></div>
-    <div class="grid">
-      <div class="card"><h3>Solutions used (litres drawn from each tote)</h3><div class="scroll"><table id="solutions"></table></div></div>
-      <div class="card"><h3>Raw materials (approximate kg)</h3><table id="chemicals"></table></div>
-      <div class="card"><h3>Vessels (peak volume = sizing)</h3><table id="vessels"></table></div>
-      <div class="card"><h3>Drug substance lots</h3><table id="lots"></table></div>
+
+    <!-- Sheet 3 -->
+    <div class="sheet" id="sheet-process">
+      <div class="sheethead"><h2><span>3</span>Harvest and capture</h2>
+        <p>Permeate titre, product flow into Protein A, surge tank, cells and downstream batching.</p></div>
+      <div class="sgrid">
+        <div class="card"><h3>Permeate titre and NevAI 24 h forecast</h3><div class="chart"><canvas id="cTitre"></canvas></div></div>
+        <div class="card"><h3>Product harvested and Protein A cycles per day</h3><div class="chart"><canvas id="cGrams"></canvas></div></div>
+        <div class="card"><h3>Harvest surge tank</h3><div class="chart"><canvas id="cSump"></canvas></div></div>
+        <div class="card"><h3>Cells: N-1 seed and N reactor</h3><div class="chart"><canvas id="cCells"></canvas></div></div>
+        <div class="card"><h3>Viral inactivation and Protein A vessel</h3><div class="chart"><canvas id="cVi"></canvas></div></div>
+        <div class="card"><h3>Downstream vessels (batching between units)</h3><div class="chart"><canvas id="cVes"></canvas></div></div>
+      </div>
     </div>
-    <div class="grid">
-      <div class="card"><h3>Wastewater streams</h3><table id="streams"></table></div>
-      <div class="card"><h3>Where product was lost</h3><table id="losses"></table>
-        <h3 style="margin-top:12px">Wastewater by driver</h3><table id="drivers"></table>
-        <h3 style="margin-top:12px">Wastewater by route</h3><table id="routes"></table></div>
+
+    <!-- Sheet 4 -->
+    <div class="sheet" id="sheet-solutions">
+      <div class="sheethead"><h2><span>4</span>Solutions and wastewater</h2>
+        <p>Solution demand by unit, NevAI forecasts, and wastewater by stream.</p></div>
+      <div class="sgrid">
+        <div class="card"><h3>Solutions per day by unit (incl. WFI)</h3><div class="chart"><canvas id="cBuffer"></canvas></div></div>
+        <div class="card"><h3>Solutions next 24 h: NevAI forecast vs actual</h3><div class="chart"><canvas id="cBufFc"></canvas></div></div>
+        <div class="card"><h3>Wastewater flow and NevAI forecast</h3><div class="chart"><canvas id="cWw"></canvas></div></div>
+        <div class="card span-all"><h3>Daily wastewater by stream</h3><div class="chart wide"><canvas id="cDaily"></canvas></div></div>
+      </div>
     </div>
-    <div class="card"><h3>Events and alarms</h3><table id="events"></table></div>
+
+    <!-- Sheet 5 -->
+    <div class="sheet" id="sheet-materials">
+      <div class="sheethead"><h2><span>5</span>Materials, vessels and lots</h2>
+        <p>Solutions and raw materials used, vessel sizing, drug substance lots, wastewater streams and product losses.</p></div>
+      <div class="sgrid two">
+        <div class="card"><h3>Solutions used (litres drawn from each tote)</h3><div class="scroll"><table id="solutions"></table></div></div>
+        <div class="card"><h3>Raw materials (approximate kg)</h3><table id="chemicals"></table></div>
+        <div class="card"><h3>Vessels (peak volume = sizing)</h3><table id="vessels"></table></div>
+        <div class="card"><h3>Drug substance lots</h3><table id="lots"></table></div>
+        <div class="card span-all"><h3>Wastewater streams</h3><div class="scroll"><table id="streams"></table></div></div>
+        <div class="card"><h3>Where product was lost</h3><table id="losses"></table></div>
+        <div class="card"><h3>Wastewater by driver</h3><table id="drivers"></table>
+          <h3 style="margin-top:12px">Wastewater by route</h3><table id="routes"></table></div>
+      </div>
+    </div>
+
+    <!-- Sheet 6 -->
+    <div class="sheet" id="sheet-nevai">
+      <div class="sheethead"><h2><span>6</span>NevAI and events</h2>
+        <p>NevAI actions, watch flags, buffer preparation, and the run's event and alarm log.</p></div>
+      <div class="card" id="nevaiCard"><h3>NevAI in operation: actions, watch and buffer preparation</h3>
+        <div id="nevaiOut" class="small"></div>
+        <div class="pfdbar no-print" style="margin-top:8px">
+          <button id="benefitBtn" type="button" class="ghost">Measure NevAI benefit (advisory vs acting)</button>
+          <span id="benefitInfo" class="muted">Runs the selected case twice with the same seed.</span>
+        </div>
+        <div id="benefitOut"></div>
+      </div>
+      <div class="card"><h3>Events and alarms</h3><table id="events"></table></div>
+    </div>
   </section>
 
   <!-- ═══════════════ SCHEMATICS & DIAGRAMS ═══════════════ -->
@@ -472,25 +585,79 @@ const LOSS_LABEL = {tff_retentate: 'TFF cell concentrate (to bio-kill)', cell_bl
   polishing: 'AEX, CEX and virus filtration (step yields)', sptff: 'UF/DF and fill (step yield)'};
 let OPS = ['capture', 'vi', 'depth', 'adjust', 'aex', 'cex', 'vf', 'sptff', 'bds'];
 let LAST = null, SIZING = null, CASEDEF = null, PREV = {}, CMP = null, ACTIVE = '1', ENVVIEW = false, prevT = null;
-const KPIS = [
-  ['Drug substance', 'drug_substance_kg', ' kg'], ['Overall yield', 'overall_yield_pct', ' %'],
-  ['N seed from N-1', 'n1_seed_vcd', ' ×10⁶/mL'], ['N-1 duration', 'n1_days', ' d'],
-  ['Final permeate titre', 'final_titre_gL', ' g/L'],
-  ['First capture cycle', 'first_cycle_n_day', ' (N day)'], ['Permeate before 1st cycle', 'first_cycle_sump_L', ' L'],
-  ['Capture cycles', 'capture_cycles', ''], ['Peak cycles / day', 'peak_cycles_day', ''],
-  ['Capture wait', 'capture_wait_h', ' h'], ['Solutions incl. WFI', 'buffer_m3', ' m³'],
-  ['Solutions per g DS', 'buffer_L_per_g_ds', ' L/g'], ['Peak solution day', 'buffer_daily_peak_L', ' L'],
-  ['WFI used directly', 'wfi_m3', ' m³'], ['Brij-9 concentrate', 'detergent_L', ' L'],
-  ['Depth filters', 'depth_filters', ''], ['Virus filter changes', 'vf_changes', ''],
-  ['Lots', 'lots', ''], ['Cryovault containers', 'containers', ''], ['Left in process at end', 'in_process_end_g', ' g'],
-  ['Wastewater', 'wastewater_m3', ' m³'], ['Wastewater per kg DS', 'wastewater_m3_per_kg_ds', ' m³/kg'],
-  ['WW volume-driven', 'ww_volume_driven_pct', ' %'], ['WW mass-driven', 'ww_mass_driven_pct', ' %'],
-  ['NevAI buffer forecast error', 'nevai_buffer_forecast_mape_pct', ' %'],
-  ['NevAI next-load error', 'nevai_switch_forecast_mae_h', ' h'],
-  ['NevAI early partial loads', 'nevai_partial_loads', ''], ['NevAI watch flags', 'nevai_watch_flags', ' h'],
-  ['NevAI first flag', 'nevai_watch_first_flag_n_day', ' (N day)'], ['NevAI watch peak score', 'nevai_watch_peak_score', ''],
-  ['Vial → N harvest (seed train)', 'seed_train_days', ' d'], ['Biology model titre', 'bio_titre_gL', ' g/L']
-];
+// ── Outputs: headline figures, grouped figures, sheets ─────────────
+const KPI_HERO = [
+  ['Drug substance', 'drug_substance_kg', 'kg'], ['Overall yield', 'overall_yield_pct', '%'],
+  ['Final permeate titre', 'final_titre_gL', 'g/L'], ['Protein A cycles', 'capture_cycles', ''],
+  ['Solutions per g DS', 'buffer_L_per_g_ds', 'L/g'], ['Wastewater per kg DS', 'wastewater_m3_per_kg_ds', 'm³/kg']];
+const KPI_GROUPS = [
+  ['Upstream and seed train', [['N seed from N-1', 'n1_seed_vcd', '×10⁶/mL'], ['N-1 duration', 'n1_days', 'd'],
+    ['Vial → N harvest (seed train)', 'seed_train_days', 'd'], ['Biology model titre', 'bio_titre_gL', 'g/L']]],
+  ['Protein A capture', [['First capture cycle', 'first_cycle_n_day', 'N day'], ['Permeate before 1st cycle', 'first_cycle_sump_L', 'L'],
+    ['Peak cycles / day', 'peak_cycles_day', ''], ['Capture wait', 'capture_wait_h', 'h']]],
+  ['Downstream and fill', [['Depth filters', 'depth_filters', ''], ['Virus filter changes', 'vf_changes', ''],
+    ['Lots', 'lots', ''], ['Cryovault containers', 'containers', ''], ['Left in process at end', 'in_process_end_g', 'g']]],
+  ['Solutions', [['Solutions incl. WFI', 'buffer_m3', 'm³'], ['Peak solution day', 'buffer_daily_peak_L', 'L'],
+    ['WFI used directly', 'wfi_m3', 'm³'], ['Brij-9 concentrate', 'detergent_L', 'L']]],
+  ['Wastewater', [['Wastewater', 'wastewater_m3', 'm³'], ['Volume-driven', 'ww_volume_driven_pct', '%'],
+    ['Mass-driven', 'ww_mass_driven_pct', '%']]],
+  ['NevAI', [['Buffer forecast error', 'nevai_buffer_forecast_mape_pct', '%'], ['Next-load error', 'nevai_switch_forecast_mae_h', 'h'],
+    ['Early partial loads', 'nevai_partial_loads', ''], ['Watch flags', 'nevai_watch_flags', 'h'],
+    ['First flag', 'nevai_watch_first_flag_n_day', 'N day'], ['Watch peak score', 'nevai_watch_peak_score', '']]]];
+
+const isNone = v => v === null || v === undefined || v === '';
+function kv(k, key, u) {
+  if (isNone(k[key])) return '—';
+  const s = fmt(k[key]);
+  return u === 'N day' ? 'N day ' + s : s + (u ? ' ' + u : '');
+}
+function renderKpis(k) {
+  $('kpiHero').innerHTML = KPI_HERO.map(([l, key, u]) =>
+    `<div class="kpi"><div class="l">${l}</div><div class="v">${isNone(k[key]) ? '—' : fmt(k[key]) +
+      (u ? `<span class="u">${u}</span>` : '')}</div></div>`).join('');
+  $('kpis').innerHTML = KPI_GROUPS.map(([g, items]) => `<div class="card"><h3>${g}</h3><table>` +
+    items.map(([l, key, u]) => `<tr><td class="muted">${l}</td><td class="num">${kv(k, key, u)}</td></tr>`).join('') +
+    '</table></div>').join('');
+}
+
+const SHEETS = ['summary', 'biology', 'process', 'solutions', 'materials', 'nevai'];
+let SHEET = 'summary';
+function showSheet(name) {
+  if (!SHEETS.includes(name)) name = 'summary';
+  SHEET = name;
+  document.querySelectorAll('#sheetBar [data-sheet]').forEach(b => b.classList.toggle('on', b.dataset.sheet === name));
+  document.querySelectorAll('#tab-outputs .sheet').forEach(s => s.classList.toggle('on', s.id === 'sheet-' + name));
+  const i = SHEETS.indexOf(name);
+  $('sheetPos').textContent = `${i + 1} / ${SHEETS.length}`;
+  $('sheetPrev').disabled = i === 0;
+  $('sheetNext').disabled = i === SHEETS.length - 1;
+  requestAnimationFrame(() => Object.values(CH).forEach(c => { try { c.resize(); } catch (e) { /* ignore */ } }));
+  try { sessionStorage.setItem('idb.sheet', name); } catch (e) { /* ignore */ }
+}
+function stepSheet(d) { showSheet(SHEETS[Math.min(SHEETS.length - 1, Math.max(0, SHEETS.indexOf(SHEET) + d))]); }
+function initSheets() {
+  document.querySelectorAll('#sheetBar [data-sheet]').forEach(b => { b.onclick = () => showSheet(b.dataset.sheet); });
+  $('sheetPrev').onclick = () => stepSheet(-1);
+  $('sheetNext').onclick = () => stepSheet(1);
+  document.addEventListener('keydown', e => {           // ← / → flips sheets on the Outputs tab
+    if (!$('tab-outputs').classList.contains('on') || e.altKey || e.ctrlKey || e.metaKey) return;
+    if (/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
+    if (e.key === 'ArrowLeft') stepSheet(-1);
+    if (e.key === 'ArrowRight') stepSheet(1);
+  });
+  let s = 'summary';
+  try { s = sessionStorage.getItem('idb.sheet') || s; } catch (e) { /* ignore */ }
+  showSheet(s);
+}
+
+// consistent, report-style chart defaults
+if (window.Chart) {
+  Chart.defaults.font.family = '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif';
+  Chart.defaults.font.size = 11;
+  Chart.defaults.color = '#5b6675';
+  Chart.defaults.borderColor = '#eef1f5';
+  Chart.defaults.plugins.legend.position = 'bottom';
+}
 
 async function api(path, body) {
   const opt = body === undefined ? {} :
@@ -1160,8 +1327,7 @@ function renderBio(b) {
 // ── one run ────────────────────────────────────────────────────────
 function render(j) {
   const k = j.kpi;
-  $('kpis').innerHTML = KPIS.map(([l, key, u]) =>
-    `<div class="kpi"><div class="l">${l}</div><div class="v">${k[key] === null || k[key] === undefined ? '—' : k[key] + u}</div></div>`).join('');
+  renderKpis(k);
   renderDesign(j.design);
   const S = j.series, W = j.wastewater, D = W.daily, days = D.map(d => d.day);
   line('cTitre', [ds('Permeate titre', pts(S, 'titre_harvest'), C[0]),
@@ -1393,7 +1559,7 @@ function preparePrint() {
   if (window.SeqFilm) SeqFilm.stop();
   document.body.classList.add('printall');
   for (const [id, ch] of Object.entries(CH)) {
-    try { ch.resize(); } catch (e) { /* ignore */ }
+    try { ch.options.devicePixelRatio = 3; ch.resize(); ch.update('none'); } catch (e) { /* ignore */ }
     const box = $(id).parentNode;
     let img = box.querySelector('img.pimg');
     if (!img) { img = document.createElement('img'); img.className = 'pimg'; img.alt = ''; box.appendChild(img); }
@@ -1423,7 +1589,9 @@ function printReport() {
 window.addEventListener('beforeprint', preparePrint);
 window.addEventListener('afterprint', () => {
   document.body.classList.remove('printall');
-  Object.values(CH).forEach(c => { try { c.resize(); } catch (e) { /* ignore */ } });
+  Object.values(CH).forEach(c => {
+    try { c.options.devicePixelRatio = undefined; c.resize(); c.update('none'); } catch (e) { /* ignore */ }
+  });
 });
 
 // ── start ──────────────────────────────────────────────────────────
@@ -1436,6 +1604,7 @@ async function init() {
   if (window.SeqFilm) SeqFilm.init();
   document.querySelectorAll('#tabs button').forEach(b => { b.onclick = () => showTab(b.dataset.tab); });
   showTab(location.hash.slice(1) || 'cases');
+  initSheets();
   const [def, cd] = await Promise.all([api('/api/icb/defaults'), api('/api/icb/cases')]);
   CASEDEF = cd;
   OPS = def.buffer_ops || OPS;
